@@ -1,0 +1,35 @@
+{
+  "engine_key": "postnava_ventocr",
+  "display_name": "PostNAVA",
+  "developer": "VentOCR Developer Team",
+  "version": "2.0.0",
+  "ventocr_min": "0.5.5",
+  "description": "Servo-U Edi monitor screen (e.g. after NAVA / standby). OCR: Edipeak, Edimin. Breath = Edimin display update (neural inspiration onset). Waveform: Edi with wrap-around sweep (about 164 px/s, 5.4 s per sweep on 1280x720).",
+
+  "sample_video": "PostNAVA_VentOCR_sample.mp4",
+  "base_resolution": "1280x720",
+  "supported_resolutions": ["1280x720"],
+
+  "has_extract_waves": true,
+  "output_columns": {
+    "frames": ["Frame", "EdiPeak", "Edimin", "EdiPeak_Update", "Edimin_Update", "Sweep_X", "BreathMark", "BreathNumber", "Abnormal"],
+    "breaths": ["BreathNumber", "EdiPeak", "Edimin", "Edimin_displayed", "Duration", "Wave_Max", "Wave_Min", "Clipped_Points", "Alert"],
+    "waves": ["X", "Edi"]
+  },
+
+  "breath_summary": ["EdiPeak", "Edimin", "Edimin_displayed", "Wave_Max", "Clipped_Points"],
+  "labels": {
+    "Edimin_displayed": "Edimin (displayed)",
+    "Wave_Max": "Edi max (waveform)",
+    "Clipped_Points": "Clipped points"
+  },
+
+  "accuracy": {
+    "EdiPeak":          { "method": null, "threshold": null, "unit": "µV" },
+    "Edimin":           { "method": null, "threshold": null, "unit": "µV" },
+    "Edimin_displayed": { "method": null, "threshold": null, "unit": "µV" },
+    "Wave_Max":         { "method": null, "threshold": null, "unit": "µV" },
+    "Wave_Min":         { "method": null, "threshold": null, "unit": "µV" },
+    "BreathMark":       { "method": null, "threshold": null }
+  }
+}

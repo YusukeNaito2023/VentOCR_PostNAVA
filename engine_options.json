@@ -1,0 +1,16 @@
+{
+  "initial_ocr": {
+    "skip_keys": [],
+    "use_gpu": true,
+    "diff_thresh": 2.0
+  },
+  "post_ocr": {
+    "fps": 10,
+    "edi_scale_max": 20,
+    "min_breath_sec": 0.3,
+    "max_onset_lag_sec": 1.5,
+    "onset_shift_sec": -0.3,
+    "abnormal_screen_diff": 15.0,
+    "abnormal_scale_diff": 8.0
+  }
+}
