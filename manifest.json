@@ -2,7 +2,7 @@
   "engine_key": "postnava_ventocr",
   "display_name": "PostNAVA",
   "developer": "VentOCR Developer Team",
-  "version": "2.0.0",
+  "version": "0.1.0",
   "ventocr_min": "0.5.5",
   "description": "Servo-U Edi monitor screen (e.g. after NAVA / standby). OCR: Edipeak, Edimin. Breath = Edimin display update (neural inspiration onset). Waveform: Edi with wrap-around sweep (about 164 px/s, 5.4 s per sweep on 1280x720).",
 
