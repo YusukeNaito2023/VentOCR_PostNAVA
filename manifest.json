@@ -2,8 +2,8 @@
   "engine_key": "postnava_ventocr",
   "display_name": "PostNAVA",
   "developer": "VentOCR Developer Team",
-  "version": "0.1.0",
-  "ventocr_min": "0.5.5",
+  "version": "0.1.1",
+  "ventocr_min": "0.6.2",
   "description": "Servo-U Edi monitor screen (e.g. after NAVA / standby). OCR: Edipeak, Edimin. Breath = Edimin display update (neural inspiration onset). Waveform: Edi with wrap-around sweep (about 164 px/s, 5.4 s per sweep on 1280x720).",
 
   "sample_video": "PostNAVA_VentOCR_sample.mp4",
@@ -22,6 +22,19 @@
     "Edimin_displayed": "Edimin (displayed)",
     "Wave_Max": "Edi max (waveform)",
     "Clipped_Points": "Clipped points"
+  },
+
+  "outputs": {
+    "waves": [
+      { "name": "Edi", "unit": "µV", "color": "#9467bd", "scale": { "min": "E_min", "max": "E_max" } }
+    ],
+    "breath_values": [
+      { "name": "EdiPeak",          "label": "EdiPeak",            "unit": "µV" },
+      { "name": "Edimin",           "label": "Edimin",             "unit": "µV" },
+      { "name": "Edimin_displayed", "label": "Edimin (displayed)", "unit": "µV" },
+      { "name": "Wave_Max",         "label": "Edi max (waveform)", "unit": "µV" },
+      { "name": "Clipped_Points",   "label": "Clipped points" }
+    ]
   },
 
   "accuracy": {
