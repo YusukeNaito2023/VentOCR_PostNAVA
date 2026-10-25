@@ -1,6 +1,6 @@
 # PostNAVA Engine Settings
-# 座標はすべて基準解像度（1280x720）の画面座標。入力フレームはこの解像度に正規化してから使う。
-# 基準画像: layout.jpg（resource/postnava_ventocr_sample.mp4、Servo-U の「Edi モニタ」画面、スタンバイ中）
+# All coordinates are screen coordinates at the base resolution (1280x720). Input frames are normalized to this resolution before use.
+# Reference image: layout.jpg (resource/postnava_ventocr_sample.mp4, Servo-U "Edi monitor" screen, in standby)
 
 import os
 
@@ -8,64 +8,64 @@ BASE_RESOLUTION = (1280, 720)  # (width, height)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ------------------------------------------------------------
-# 数値の読み取り位置 (x, y, w, h)
+# Value ROIs (x, y, w, h)
 # ------------------------------------------------------------
 ROIs = {
-    "EdiPeak": (1070, 248, 160, 60),   # Edipeak（µV）。呼吸がしばらく検出されないと「***」になる
-    "Edimin":  (1095, 373, 110, 31),   # Edimin（µV）
+    "EdiPeak": (1070, 248, 160, 60),   # Edipeak (µV). Becomes "***" when no breath is detected for a while
+    "Edimin":  (1095, 373, 110, 31),   # Edimin (µV)
 }
 
-# 画面の確認用（Edi モニタ画面でないフレームを Abnormal にする）: 動かない文字の範囲
+# Screen check (frames that are not the Edi monitor screen become Abnormal): regions of static text
 SCREEN_CHECK_ROIS = [
-    (1062, 218, 80, 16),   # 「Edipeak」
-    (1062, 355, 70, 16),   # 「Edimin」
+    (1062, 218, 80, 16),   # "Edipeak"
+    (1062, 355, 70, 16),   # "Edimin"
 ]
-SCREEN_REFERENCE_IMAGE = "screen_reference.png"  # 上の範囲を基準画像から切り出して横に並べたもの（グレースケール）
+SCREEN_REFERENCE_IMAGE = "screen_reference.png"  # the regions above cropped from the reference image and placed side by side (grayscale)
 
-# Edi の縦軸の上限の目盛り（「20」）。小さすぎて OCR では読めないので、基準画像と比べて違うフレームを Abnormal にする
-# （縦軸の上限は engine_options の post_ocr.edi_scale_max。既定 20 µV）
+# Upper-limit label of the Edi vertical axis ("20"). Too small to OCR, so frames that differ from the reference image become Abnormal
+# (the vertical-axis upper limit is post_ocr.edi_scale_max in engine_options; default 20 µV)
 SCALE_LABEL_ROI = (152, 220, 30, 14)
 SCALE_REFERENCE_IMAGE = "scale_reference.png"
 
 # ------------------------------------------------------------
-# 波形の描画領域と掃引
+# Waveform drawing area and sweep
 # ------------------------------------------------------------
-# 掃引は左端 X_LEFT から右へ描き、X_RIGHT に達すると X_LEFT に戻って古い波形を上書きする（wrap around）。
-# ECG と Edi は同じ位置を同時に描き、ペン先の前の約35〜40px を消している（消去帯）。
-# 掃引の速さはサンプルで約164 px/秒（1周 896px ≒ 5.4秒）。実際の値は動画から推定する。
+# The sweep draws rightward from the left edge X_LEFT; on reaching X_RIGHT it returns to X_LEFT and overwrites the old waveform (wrap around).
+# ECG and Edi are drawn at the same position simultaneously, erasing about 35-40 px ahead of the pen tip (erase band).
+# Sweep speed is about 164 px/s in the sample (one sweep 896 px ≈ 5.4 s). The actual value is estimated from the video.
 SWEEP_X_LEFT = 150
-SWEEP_X_RIGHT = 1046          # この列は描かれない（[X_LEFT, X_RIGHT) が1周）
-SWEEP_PX_PER_SEC = 164.0      # 掃引の速さの既定値
-SWEEP_GAP_MIN = 15            # 消去帯とみなす空白の幅（px）
+SWEEP_X_RIGHT = 1046          # this column is not drawn ([X_LEFT, X_RIGHT) is one sweep)
+SWEEP_PX_PER_SEC = 164.0      # default sweep speed
+SWEEP_GAP_MIN = 15            # width of a blank treated as the erase band (px)
 SWEEP_GAP_MAX = 80
-SWEEP_GAP_X_MIN = 195         # これより左で始まる空白は使わない（左端の目盛りの帯と区別できないため）
-SWEEP_ERASE_MARGIN = 80       # 1枚の画像から読める範囲 = ペン先から (1周 − この幅) まで（消去帯 約40px ＋ ペン先の推定誤差の余裕）
+SWEEP_GAP_X_MIN = 195         # blanks starting left of this are not used (indistinguishable from the scale-label band at the left edge)
+SWEEP_ERASE_MARGIN = 80       # range readable from one image = from the pen tip back to (one sweep − this width) (erase band ~40 px + margin for pen-tip estimation error)
 
-# ECG（掃引位置の検出にだけ使う）
+# ECG (used only to detect the sweep position)
 ECG_ROWS = (124, 212)
 ECG_GRAY_MIN = 140
 
 # ------------------------------------------------------------
-# Edi 波形
+# Edi waveform
 # ------------------------------------------------------------
-EDI_ROWS = (217, 421)         # Edi 波形の帯（パネルの上端〜下端）
-# 縦軸: 0 µV = パネルの下端、上限 = パネルの上端（目盛りの文字の位置ではない）。
-# サンプル動画の Edipeak（20 未満の24呼吸）と波形の頂点の y から較正: 10.0 px/µV、残差 SD 1.0 px
-EDI_Y_ZERO = 419.4            # 0 µV の y
-EDI_Y_TOP = 219.4             # 縦軸の上限（edi_scale_max）の y
-EDI_DEFAULT_SCALE = 20.0      # 縦軸の上限の既定値（µV）
-EDI_HUE = (135, 170)          # 波形の色（紫）。OpenCV の HSV（0-179）
+EDI_ROWS = (217, 421)         # Edi waveform band (panel top to bottom edge)
+# Vertical axis: 0 µV = panel bottom edge, upper limit = panel top edge (not the position of the scale-label text).
+# Calibrated from the sample video's Edipeak (24 breaths below 20) and the y of the waveform peaks: 10.0 px/µV, residual SD 1.0 px
+EDI_Y_ZERO = 419.4            # y of 0 µV
+EDI_Y_TOP = 219.4             # y of the vertical-axis upper limit (edi_scale_max)
+EDI_DEFAULT_SCALE = 20.0      # default vertical-axis upper limit (µV)
+EDI_HUE = (135, 170)          # waveform color (purple). OpenCV HSV (0-179)
 EDI_SAT_MIN = 40
 EDI_VAL_MIN = 60
-# 右端の Edi バー（濃い紫の四角。高さが変わる）。EDI_BAR_X の列で彩度の高い画素の塊をバーとし、
-# その周り EDI_BAR_PAD px では、バーより明るい画素（波形の線）だけを残す（縁は JPEG でぼけて彩度が下がるため）
+# Edi bar at the right edge (dark purple rectangle whose height changes). A cluster of high-saturation pixels in the EDI_BAR_X columns is the bar;
+# within EDI_BAR_PAD px around it, only pixels brighter than the bar (the waveform trace) are kept (the edges are blurred by JPEG and lose saturation)
 EDI_BAR_X = (1000, 1048)
 EDI_BAR_SAT_MIN = 150
 EDI_BAR_PAD = 4
-EDI_BAR_TRACE_VAL_MIN = 135   # バーの明度は約112、バーに重なった線は約150
-EDI_BAR_TRACE_X_MAX = 1040    # これより右（バーの右端と白い破線）ではバーの周りの画素を使わない
-EDI_SKIP_X = [(1003, 1007), (1041, 1045)]  # バーの左の縁と右の白い破線。この列は読まずに両隣から補間する
-EDI_GAP_FILL = 12             # この幅（px）以下の欠けは直線で補間する
-EDI_CLIP_MARGIN = 6           # 縦軸の上端/下端からこの px 以内の値は、はみ出し（頭打ち）とみなす
-# 左上の目盛り「20」の文字が線に重なって隠す範囲 (x_min, x_max, y_max)。この列では y_max まで届いていれば上端に達したとみなす
+EDI_BAR_TRACE_VAL_MIN = 135   # bar brightness is about 112; trace overlapping the bar is about 150
+EDI_BAR_TRACE_X_MAX = 1040    # right of this (the bar's right edge and the white dashed line), pixels around the bar are not used
+EDI_SKIP_X = [(1003, 1007), (1041, 1045)]  # the bar's left edge and the white dashed line on the right. These columns are not read; they are interpolated from both neighbors
+EDI_GAP_FILL = 12             # gaps of this width (px) or less are linearly interpolated
+EDI_CLIP_MARGIN = 6           # values within this many px of the vertical axis top/bottom edge are treated as overflow (clipping)
+# Region where the top-left scale label "20" overlaps and hides the trace (x_min, x_max, y_max). In these columns, reaching y_max counts as reaching the top edge
 EDI_LABEL_OCCLUSION = (150, 188, 250)

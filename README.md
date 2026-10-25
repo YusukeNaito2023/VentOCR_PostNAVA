@@ -1,43 +1,43 @@
 # PostNAVA VentOCR Engine (postnava_ventocr)
 
 ## Supported Devices
-- Servo-U の「Edi モニタ」画面（上に ECG、中央に Edi 波形、右に Edipeak / Edimin の数値。NAVA 離脱後・スタンバイ中など）
-- 1280x720 で収録した動画（ほかの解像度は 1280x720 に縮小・拡大してから読む）
+- Servo-U "Edi monitor" screen (ECG at the top, Edi waveform in the middle, Edipeak / Edimin values on the right; e.g. after weaning from NAVA, in standby)
+- Videos recorded at 1280x720 (other resolutions are scaled to 1280x720 before reading)
 
 ## Description
-- **OCR**: Edipeak、Edimin（右側の数値）。表示が変わったフレームだけ OCR する
-  - 約10秒間呼吸が検出されないと、どちらも「***」になる（値なし。その呼吸の Alert に `NoBreathDetected`）
-- **1呼吸** = Edimin の表示の更新から、次の呼吸の Edimin の更新まで
-  - Servo-U は Edi が立ち上がる（神経吸気の始まり）ときに Edimin を、ピークを過ぎて下がり始めたあと（約0.35秒後）に Edipeak を更新する
-  - 値が前と同じだと表示が変わらず更新が見えないので、呼吸は Edipeak の更新で数え、その直前（`max_onset_lag_sec` 以内）の Edimin の更新を始まりとする。
-    見えないときは典型的な遅れ（サンプルで0.4秒）から推定する（Alert に `OnsetEstimated`）
-  - Edimin の更新は Edi の立ち上がりより少し遅れる（20%の高さを過ぎてから中央値0.1秒）ので、区切りは `onset_shift_sec`（既定 -0.3秒）だけ前に置く
-- **Breaths.csv の値**
-  - `EdiPeak`: その呼吸で表示された Edipeak
-  - `Edimin`: その呼吸の呼気の最小値 = 次の呼吸の始まりで表示される Edimin（波形の最小値と一致することを確認済み）。
-    `Edimin_displayed` はその呼吸の間に表示されていた値（= 1つ前の呼吸の呼気の最小値）
-  - `Wave_Max` / `Wave_Min`: 抽出した波形の最大・最小（µV）
-- **波形**: Edi（BreathCSVs/<n>.csv の列は X, Edi。単位 µV）
-  - 掃引は約164 px/秒で左から右へ描き、x=1046 に達すると x=150 に戻って上書きする（1周 896px ≒ 5.4秒、wrap around）
-  - 各フレームで ECG と Edi のどちらも描かれていない空白（ペン先の前の消去帯、幅約35〜40px）を探してペン先とし、
-    動画全体から掃引の速さと位相を推定して各フレームのペン先を決める（Edi が描かれない間の偽の空白などは外れ値として除く）
-  - 呼吸の波形は、その呼吸の最後のフレームの画像から「開始時のペン先の次の列〜終了時のペン先の列」を切り出す。
-    1周（約5.4秒）より長い呼吸は、足りない前の部分をそれより前のフレームの画像から切り出してつなぐ（`Wave_Images` = 使った画像の数）
-  - 各点の時刻 = `Wave_T0` + 行番号 / `Wave_Rate`（Breaths.csv）
-  - 縦軸: 0 µV = パネルの下端（y=419.4）、20 µV = パネルの上端（y=219.4）。10.0 px/µV（サンプルの Edipeak 24呼吸で較正、残差 SD 0.1 µV）
-  - 縦軸の上限を超えた部分は描かれないので、上限の値（20 µV）で頭打ちにする（`Clipped_Points` = その点の数、Alert に `Clipped`）。
-    この呼吸の Edipeak は画面の数値の方が正しい
+- **OCR**: Edipeak and Edimin (values on the right). Only frames where the display changed are OCR'd
+  - If no breath is detected for about 10 s, both become "***" (no value; `NoBreathDetected` in that breath's Alert)
+- **1 breath** = from an Edimin display update to the next breath's Edimin update
+  - The Servo-U updates Edimin when Edi rises (onset of neural inspiration), and Edipeak after Edi passes its peak and starts to fall (about 0.35 s later)
+  - When a value equals the previous one the display does not change and the update is invisible, so breaths are counted by Edipeak updates, and the Edimin update just before each (within `max_onset_lag_sec`) is taken as the onset.
+    If it is invisible, the onset is estimated from the typical lag (0.4 s in the sample) (`OnsetEstimated` in Alert)
+  - The Edimin update lags slightly behind the Edi rise (median 0.1 s after passing 20% of the height), so the boundary is placed `onset_shift_sec` (default -0.3 s) earlier
+- **Values in Breaths.csv**
+  - `EdiPeak`: the Edipeak shown for that breath
+  - `Edimin`: minimum of that breath's expiration = the Edimin shown at the next breath's onset (verified to match the waveform minimum).
+    `Edimin_displayed` is the value shown during that breath (= minimum of the previous breath's expiration)
+  - `Wave_Max` / `Wave_Min`: maximum / minimum of the extracted waveform (µV)
+- **Waveform**: Edi (columns of BreathCSVs/<n>.csv are X, Edi; unit µV)
+  - The sweep draws left to right at about 164 px/s; on reaching x=1046 it returns to x=150 and overwrites (one sweep 896 px ≈ 5.4 s, wrap around)
+  - In each frame, the blank where neither ECG nor Edi is drawn (the erase band ahead of the pen tip, about 35-40 px wide) is located and taken as the pen tip;
+    the sweep speed and phase are estimated from the whole video to determine the pen tip in each frame (false blanks, e.g. while Edi is not drawn, are removed as outliers)
+  - A breath's waveform is cut out from the image of that breath's last frame as "the column after the start pen tip through the end pen tip column".
+    For breaths longer than one sweep (about 5.4 s), the missing earlier part is cut out from images of earlier frames and joined (`Wave_Images` = number of images used)
+  - Time of each point = `Wave_T0` + row number / `Wave_Rate` (Breaths.csv)
+  - Vertical axis: 0 µV = panel bottom edge (y=419.4), 20 µV = panel top edge (y=219.4). 10.0 px/µV (calibrated with 24 breaths' Edipeak in the sample, residual SD 0.1 µV)
+  - Parts above the vertical-axis upper limit are not drawn, so they are clipped at the upper-limit value (20 µV) (`Clipped_Points` = number of such points, `Clipped` in Alert).
+    For such breaths, the on-screen Edipeak value is the correct one
 
 ## Expected Layout
-See `layout.jpg`（赤枠: OCR、白枠: Edi 波形、灰枠: 掃引位置の検出に使う ECG、黄枠: Edi バー（除外）、青枠: 画面確認用の文字・縦軸の目盛り）。
+See `layout.jpg` (red boxes: OCR, white box: Edi waveform, gray box: ECG used to detect the sweep position, yellow box: Edi bar (excluded), blue boxes: text for the screen check and the vertical-axis scale label).
 
 ## Limitations
-- 縦軸の上限は設定値（`edi_scale_max`、既定 20 µV）。目盛り「20」は小さく OCR で読めないため、基準画像（`scale_reference.png`）と違う
-  フレームは Abnormal にし、その呼吸の波形は出力しない（Alert に `ScaleChanged`）。上限を変えた動画は `edi_scale_max` を合わせ、基準画像を作り直す
-- 縦軸の上限（20 µV）を超えた部分は頭打ちになる（上記）
-- 呼吸の区切りは Servo-U の呼吸検出（表示の更新）に従う。小さな Edi の揺れも1呼吸として数えられることがある
-- 録画の最初と最後の呼吸は途中で切れている（Alert に `Fragment`）
-- 右端の Edi バー（x=1000〜1048）と白い破線に重なる列（x=1003〜1007, 1041〜1045）は読まずに両隣から補間する
+- The vertical-axis upper limit is a setting (`edi_scale_max`, default 20 µV). The scale label "20" is too small to OCR, so frames that differ from the reference image (`scale_reference.png`)
+  are marked Abnormal and that breath's waveform is not output (`ScaleChanged` in Alert). For videos with a different upper limit, set `edi_scale_max` accordingly and recreate the reference image
+- Parts above the vertical-axis upper limit (20 µV) are clipped (see above)
+- Breath boundaries follow the Servo-U's breath detection (display updates). Small Edi fluctuations may also be counted as one breath
+- The first and last breaths of a recording are cut off partway (`Fragment` in Alert)
+- Columns overlapping the Edi bar at the right edge (x=1000-1048) and the white dashed line (x=1003-1007, 1041-1045) are not read; they are interpolated from both neighbors
 
 ## Author
 - VentOCR Developer Team

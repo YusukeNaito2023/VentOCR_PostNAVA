@@ -1,14 +1,12 @@
 # CHANGELOG
 
 ## 0.2.0 (2026-10-25)
-engine_api 3 に対応（VentOCR がフレームの画像を全部は保存せず、エンジンが開いた画像だけを作る。ENGINE_API.md §5.1）。
-- 波形の抽出で使う画像を、呼吸ごとの処理の前に番号の小さい順に開いておく（`_frames_to_read`）。呼吸ごとの処理は
-  終了画像から後ろへ戻りながら読むので、そのままだと区間動画のシークが起きる。全フレームを見る処理は initial_ocr の中だけ
-- 秒とフレーム数の換算をフレームレートから: 掃引の当てはめの区間（10 fps で 150 / 25 フレーム）と速さの粗い推定の間隔（20）。
-  10 fps では 0.1.1 と同じ
-- outputs: alerts（Alert の値の意味と、精度の評価で除外するか）を追加
-- 確認（VentOCR e0e306b、PostNAVA のサンプル 306 秒）: 0.1.1（全フレームを保存）と 0.2.0（開いた画像だけを作る。作った画像は 304 枚）で、
-  Frames.csv・Breaths.csv（File_Name 以外）・波形 96 呼吸が一致。20 fps でも 96 呼吸、EdiPeak・Edimin・Edi の目盛りは 10 fps と同じ
+Supports engine_api 3 (VentOCR no longer saves every frame image; it creates only the images the engine opens. ENGINE_API.md §5.1).
+- The images used for waveform extraction are opened first, in ascending frame order, before the per-breath processing (`_frames_to_read`). The per-breath processing reads backwards from the end image, which would otherwise cause seeks in the segment video. Processing that looks at every frame happens only inside initial_ocr
+- Frame counts are derived from the frame rate instead of being fixed: the sweep-fit window and block (150 / 25 frames at 10 fps) and the lag of the rough speed estimate (20). At 10 fps the values are the same as 0.1.1
+- outputs: added alerts (the meaning of each Alert value and whether it is excluded from the accuracy evaluation)
+- The engine no longer uses Japanese: manifest labels, README, code comments and docstrings and .gitignore are in English. Entries for earlier versions below remain in Japanese
+- Check (VentOCR e0e306b, PostNAVA sample, 306 s): 0.1.1 (all frames saved) and 0.2.0 (only opened images created; 304 images) give identical Frames.csv, Breaths.csv (except File_Name) and waveforms for 96 breaths. At 20 fps: 96 breaths; EdiPeak, Edimin and the Edi scale are the same as at 10 fps
 
 ## 0.1.1 (2026-10-21)
 解析の結果は 0.1.0 と同じ。manifest.json に出力の宣言 `outputs` を足した（VentOCR 0.6.2 から。ENGINE_API.md §8.1）。

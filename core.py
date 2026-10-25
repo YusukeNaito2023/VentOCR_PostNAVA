@@ -1,20 +1,20 @@
-"""PostNAVA（Servo-U の Edi モニタ画面）VentOCR Engine
+"""PostNAVA (Servo-U Edi monitor screen) VentOCR Engine
 
-- OCR: Edipeak、Edimin（右側の数値）、Edi の縦軸の上限（目盛り）
-- 1呼吸 = Edimin の表示の更新（神経吸気の始まり）から、次の呼吸の Edimin の更新まで
-- 波形: Edi（1つだけ）
+- OCR: Edipeak, Edimin (values on the right), and the upper limit of the Edi vertical axis (scale label)
+- 1 breath = from an Edimin display update (onset of neural inspiration) to the next breath's Edimin update
+- Waveform: Edi (only one)
 
-画面の数値は Servo-U が検出した呼吸ごとに更新される:
-    Edimin  … Edi が立ち上がる（神経吸気の始まり）ときに更新。直前の呼気の最小値
-    Edipeak … Edi がピークを過ぎて下がり始めたあと（神経吸気の終わり）に更新。その呼吸のピーク値
-    約10秒間呼吸が検出されないと、どちらも「***」になる
-値が前と同じときは表示が変わらず更新が見えないので、呼吸は Edipeak の更新で数え、
-その直前の Edimin の更新を呼吸の始まりとする（見えないときは典型的な遅れから推定する）。
+The on-screen values are updated for each breath the Servo-U detects:
+    Edimin  … updated when Edi rises (onset of neural inspiration). Minimum of the preceding expiration
+    Edipeak … updated after Edi passes its peak and starts to fall (end of neural inspiration). Peak value of that breath
+    If no breath is detected for about 10 s, both become "***"
+When a value equals the previous one the display does not change and the update is invisible, so breaths are counted
+by Edipeak updates, and the Edimin update just before each is taken as the breath onset (if invisible, it is estimated from the typical lag).
 
-波形の画面は左から右へ一定の速さで掃引し、右端に達すると左端に戻って古い波形を上書きする（wrap around）。
-各フレームでペン先の前の空白（消去帯）を探してペン先の位置を記録し（initial_ocr）、
-動画全体から掃引の速さと位相を推定して、各フレームのペン先の位置を決める（post_ocr）。
-呼吸の波形は、開始時のペン先〜終了時のペン先の列を、最後のフレーム（1周より長い呼吸はそれより前のフレームも）から切り出す（extract_waves）。
+The waveform screen sweeps left to right at a constant speed; on reaching the right edge it returns to the left edge and overwrites the old waveform (wrap around).
+In each frame the blank ahead of the pen tip (erase band) is located and the pen-tip position recorded (initial_ocr);
+the sweep speed and phase are estimated from the whole video to determine the pen-tip position in each frame (post_ocr).
+A breath's waveform is cut out as the columns from the start pen tip to the end pen tip, from the last frame (and, for breaths longer than one sweep, earlier frames too) (extract_waves).
 """
 import json
 import os
@@ -36,7 +36,7 @@ NO_VALUE = "***"
 
 
 # ============================================================
-# EasyOCR初期化（V600_ventocr と同じ）
+# EasyOCR initialization (same as V600_ventocr)
 # ============================================================
 
 _EASYOCR_LOCKFILE = "easyocr_init.lock"
@@ -101,11 +101,11 @@ def _ensure_easyocr_reader_ready(gpu_enabled):
 
 
 # ============================================================
-# 共通
+# Common
 # ============================================================
 
 def _normalize_frame(frame):
-    """基準解像度（1280x720）にそろえる。"""
+    """Resize to the base resolution (1280x720)."""
     w, h = Settings.BASE_RESOLUTION
     if frame.shape[1] != w or frame.shape[0] != h:
         frame = cv2.resize(frame, (w, h), interpolation=cv2.INTER_AREA)
@@ -122,7 +122,7 @@ def _crop(img, roi):
 
 
 def _runs(mask):
-    """True が続く区間の (開始, 終了) のリスト（終了を含む）。"""
+    """List of (start, end) of consecutive True runs (end inclusive)."""
     idx = np.flatnonzero(np.diff(np.r_[0, mask.astype(np.int8), 0]))
     return list(zip(idx[0::2], idx[1::2] - 1))
 
@@ -138,7 +138,7 @@ def _load_reference(name):
 
 
 def _scale_label_diff(frame, gray, ref):
-    """縦軸の上限の目盛りと基準画像の差（Edi の線が重なった画素は除く）。"""
+    """Difference between the vertical-axis upper-limit label and the reference image (excluding pixels overlapped by the Edi trace)."""
     if ref is None:
         return np.nan
     x, y, w, h = Settings.SCALE_LABEL_ROI
@@ -154,7 +154,7 @@ def _scale_label_diff(frame, gray, ref):
 
 
 def _format_time(frame, fps):
-    """フレーム番号からHH:MM:SS:CC形式のタイムスタンプを生成"""
+    """Build an HH:MM:SS:CC timestamp from a frame number"""
     total_seconds = frame / fps
     s = int(total_seconds)
     centiseconds = int((total_seconds - s) * 100)
@@ -164,7 +164,7 @@ def _format_time(frame, fps):
 
 
 def edi_mask(frame):
-    """Edi の帯（EDI_ROWS）で波形の色の画素。右端の Edi バーの画素は除く。"""
+    """Pixels of the waveform color within the Edi band (EDI_ROWS), excluding pixels of the Edi bar at the right edge."""
     y0, y1 = Settings.EDI_ROWS
     hsv = cv2.cvtColor(frame[y0:y1], cv2.COLOR_BGR2HSV)
     h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
@@ -182,9 +182,9 @@ def edi_mask(frame):
 
 
 def detect_pen_tip(frame, gray):
-    """ペン先の x（画面の座標）。ECG と Edi のどちらも描かれていない列（消去帯）の左端の1つ手前。
+    """Pen-tip x (screen coordinates): one column before the left edge of the columns where neither ECG nor Edi is drawn (erase band).
 
-    消去帯が見つからない（右端の Edi バーに重なっている、左端に戻った直後など）ときは NaN。
+    NaN if no erase band is found (e.g. it overlaps the Edi bar at the right edge, or just after returning to the left edge).
     """
     x0, x1 = Settings.SWEEP_X_LEFT, Settings.SWEEP_X_RIGHT
     e0, e1 = Settings.ECG_ROWS
@@ -197,14 +197,14 @@ def detect_pen_tip(frame, gray):
 
 
 # ============================================================
-# OCR結果パース
+# OCR result parsing
 # ============================================================
 
 def _parse_ocr(result):
-    """EasyOCR の結果 → (値の文字列, 生の文字列, 信頼度の文字列)。
+    """EasyOCR result → (value string, raw string, confidence string).
 
-    「***」（呼吸が検出されていない）は値を NO_VALUE にする。小数1桁で表示されるが、
-    小数点を読み落とすことがあるので、小数点が無い2桁以上の数字は最後の1桁の前に小数点を補う（生の文字列は *_raw に残す）。
+    "***" (no breath detected) sets the value to NO_VALUE. Values are shown with one decimal place, but the
+    decimal point is sometimes missed, so a number of 2+ digits without a decimal point gets one inserted before the last digit (the raw string is kept in *_raw).
     """
     texts = [t for _, t, _ in result]
     confs = [s for _, _, s in result]
@@ -228,10 +228,10 @@ def _parse_ocr(result):
 def initial_ocr(frames, total_frames, subfolder, settings={},
                 progress_callback=None, frames_dir=None):
     """
-    各フレームで Edipeak・Edimin を読み取り、ペン先の位置を記録する。
+    Read Edipeak and Edimin in each frame and record the pen-tip position.
 
-    数値は、読み取り位置の画像が前回OCRしたときから変わったフレームだけOCRし、それ以外は前の値を引き継ぐ。
-    *_Diff は前のフレームからの変化の大きさ（表示の更新の検出に使う）。
+    Values are OCR'd only in frames where the ROI image has changed since the last OCR; otherwise the previous value is carried over.
+    *_Diff is the magnitude of change from the previous frame (used to detect display updates).
 
     Returns:
         pd.DataFrame (columns: Frame, BreathMark,
@@ -262,7 +262,7 @@ def initial_ocr(frames, total_frames, subfolder, settings={},
             gray = _to_gray(frame)
             row = {"Frame": frame_count, "BreathMark": 0, "OCR_Done": 0}
 
-            # --- 数値（表示が変わったときだけOCR） ---
+            # --- Values (OCR only when the display changed) ---
             for key in keys:
                 roi = _crop(gray, rois[key]).astype(np.int16)
                 row[f"{key}_Diff"] = round(float(np.abs(roi - prev_roi[key]).mean()), 2) if prev_roi[key] is not None else np.nan
@@ -278,10 +278,10 @@ def initial_ocr(frames, total_frames, subfolder, settings={},
                     row["OCR_Done"] = 1
                 row[key], row[f"{key}_raw"], row[f"{key}_conf"] = last_val[key]
 
-            # --- ペン先の位置 ---
+            # --- Pen-tip position ---
             row["Sweep_Raw"] = detect_pen_tip(frame, gray)
 
-            # --- Edi モニタ画面かどうか（動かない文字を基準画像と比べる） ---
+            # --- Is this the Edi monitor screen? (compare static text with the reference image) ---
             crop = _screen_crop(gray)
             if screen_ref is not None and crop is not None and crop.shape == screen_ref.shape:
                 row["Screen_Diff"] = round(float(np.abs(crop.astype(np.int16) - screen_ref).mean()), 2)
@@ -300,11 +300,11 @@ def initial_ocr(frames, total_frames, subfolder, settings={},
 
 
 # ============================================================
-# 掃引モデル
+# Sweep model
 # ============================================================
 
 def _circ_center(values, period, trim):
-    """周期 period の値の代表値（外れ値を除いた円周平均）。"""
+    """Representative value of values with period `period` (circular mean excluding outliers)."""
     ang = values / period * 2 * np.pi
     center = np.angle(np.mean(np.exp(1j * ang)))
     for _ in range(3):
@@ -317,7 +317,7 @@ def _circ_center(values, period, trim):
 
 
 def _phase_track(tip, valid, speed, W, window, block, trim):
-    """区間ごとの位相（tip − speed*i を mod W した値の代表値）を、折り返しを展開してつないだもの。"""
+    """Per-block phase (representative value of tip − speed*i mod W), joined with wrap-arounds unwrapped."""
     n = len(tip)
     idx = np.arange(n)
     phase = np.mod(tip - speed * idx, W)
@@ -331,22 +331,22 @@ def _phase_track(tip, valid, speed, W, window, block, trim):
 
 
 def fit_sweep(tip_raw, fps, window=None, block=None, trim=25, tol=12):
-    """各フレームのペン先の位置を求める。
+    """Determine the pen-tip position in each frame.
 
-    掃引は一定の速さなので、tip ≒ speed*i + phase (mod W)。区間ごとに位相の代表値を求めて（外れ値に強い円周平均）
-    つなぎ、その傾きから速さを補正する。Edi が描かれない間に偽の空白が止まって見えるなど、検出の誤りがあっても崩れない。
+    The sweep runs at constant speed, so tip ≈ speed*i + phase (mod W). A representative phase is computed per block (outlier-robust
+    circular mean), the blocks are joined, and the speed is corrected from their slope. Robust to detection errors, such as a false blank appearing stationary while Edi is not drawn.
 
     Args:
-        tip_raw: 各フレームで検出したペン先（画面の x）。検出できなかったフレームは NaN
+        tip_raw: pen tip detected in each frame (screen x). NaN for frames where detection failed
     Returns:
         dict(
-            tip_u:  各フレームのペン先の位置（X_LEFT からの距離。折り返しを展開した通しの値）,
-            speed:  掃引の速さ（px/フレーム）,
-            detected: 検出値を使ったフレームか,
+            tip_u:  pen-tip position in each frame (distance from X_LEFT; continuous value with wrap-arounds unwrapped),
+            speed:  sweep speed (px/frame),
+            detected: whether the detected value was used for the frame,
         )
     """
     W = Settings.SWEEP_X_RIGHT - Settings.SWEEP_X_LEFT
-    # 0.2.0: 区間の幅（フレーム数）は秒から求める（10 fps で 0.1.x と同じ 150 / 25 / 20 フレーム）。trim・tol は画素
+    # 0.2.0: block widths (in frames) are derived from seconds (at 10 fps, the same 150 / 25 / 20 frames as 0.1.x). trim and tol are in pixels
     window = window if window is not None else max(1, round(15.0 * fps))
     block = block if block is not None else max(1, round(2.5 * fps))
     n = len(tip_raw)
@@ -357,7 +357,7 @@ def fit_sweep(tip_raw, fps, window=None, block=None, trim=25, tol=12):
     if valid.sum() < 10:
         return {"tip_u": speed * idx, "speed": speed, "detected": np.zeros(n, bool)}
 
-    # 速さの粗い推定: lag フレーム離れた2点の進み（折り返しは mod で吸収）の中央値
+    # Rough speed estimate: median advance between two points lag frames apart (wrap-around absorbed by mod)
     lag = max(1, round(2.0 * fps))
     if n > lag:
         both = valid[:-lag] & valid[lag:]
@@ -366,7 +366,7 @@ def fit_sweep(tip_raw, fps, window=None, block=None, trim=25, tol=12):
             if 0 < est * lag < W / 2:
                 speed = float(est)
 
-    # 速さの補正: 位相の傾き（外れ値を除いた直線回帰）を速さに足す
+    # Speed correction: add the phase slope (linear regression excluding outliers) to the speed
     for _ in range(3):
         centers, ph_u = _phase_track(tip, valid, speed, W, window, block, trim)
         if centers is None or len(centers) < 3:
@@ -382,14 +382,14 @@ def fit_sweep(tip_raw, fps, window=None, block=None, trim=25, tol=12):
 
     centers, ph_u = _phase_track(tip, valid, speed, W, window, block, trim)
     model_u = speed * idx + (np.interp(idx, centers, ph_u) if centers is not None else 0.0)
-    model_u = model_u - np.floor(model_u[0] / W) * W  # 先頭を [0, W) に
+    model_u = model_u - np.floor(model_u[0] / W) * W  # put the first value in [0, W)
 
-    # 検出値がモデルと近いフレームは検出値を使う（その画像の実際のペン先）
+    # Use the detected value in frames where it is close to the model (the actual pen tip in that image)
     tip_u = model_u.copy()
     d = np.mod(tip - model_u + W / 2, W) - W / 2
     use = valid & (np.abs(d) <= tol)
     tip_u[use] = model_u[use] + d[use]
-    tip_u = np.maximum.accumulate(tip_u)  # 逆戻りしない
+    tip_u = np.maximum.accumulate(tip_u)  # never moves backward
     return {"tip_u": tip_u, "speed": speed, "detected": use}
 
 
@@ -404,10 +404,10 @@ def _mode(series):
 
 
 def _display_events(df, key, diff_thresh, min_gap):
-    """表示が更新されたフレームの位置（df の行番号）。
+    """Positions (df row numbers) of frames where the display was updated.
 
-    前のフレームから読み取り位置の画像が変わったフレーム（区間の最初のフレームは値が変わったとき）。
-    続けて変わったとき（書き換えの途中）は最後のフレームを採る。
+    Frames whose ROI image changed from the previous frame (for the first frame of a segment, when the value changed).
+    When consecutive frames change (mid-redraw), the last frame is taken.
     """
     diff = pd.to_numeric(df[f"{key}_Diff"], errors="coerce")
     value = df[key].astype(str)
@@ -424,7 +424,7 @@ def _display_events(df, key, diff_thresh, min_gap):
 
 def post_ocr(df, Analyze_Id, user_ID, settings={}):
     """
-    呼吸の区切り（Edipeak・Edimin の表示の更新）を求め、呼吸番号・ペン先の位置を付ける。
+    Find breath boundaries (Edipeak/Edimin display updates) and assign breath numbers and pen-tip positions.
 
     Returns:
         (df_frames, df_breaths)
@@ -443,20 +443,20 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
     df = df.sort_values("Frame").reset_index(drop=True).copy()
     n = len(df)
 
-    # Edi モニタ画面でないフレーム
+    # Frames that are not the Edi monitor screen
     screen = pd.to_numeric(df["Screen_Diff"], errors="coerce") if "Screen_Diff" in df else pd.Series(np.nan, index=df.index)
     df["Abnormal"] = (screen > abnormal_thresh).astype(int)
-    # 縦軸の上限が基準画像（edi_scale_max）と違うフレーム: 波形の値を換算できない
+    # Frames whose vertical-axis upper limit differs from the reference image (edi_scale_max): waveform values cannot be converted
     scale_diff = pd.to_numeric(df["Scale_Diff"], errors="coerce") if "Scale_Diff" in df else pd.Series(np.nan, index=df.index)
     df["Scale_Changed"] = (scale_diff > scale_thresh).astype(int)
     df.loc[df["Scale_Changed"] == 1, "Abnormal"] = 1
 
-    # --- 表示の更新 ---
+    # --- Display updates ---
     peak_events = _display_events(df, "EdiPeak", diff_thresh, min_gap) if "EdiPeak_Diff" in df else []
     min_events = _display_events(df, "Edimin", diff_thresh, min_gap) if "Edimin_Diff" in df else []
     abnormal = df["Abnormal"].to_numpy() == 1
     peak_str = df["EdiPeak"].astype(str).to_numpy() if "EdiPeak" in df else np.full(n, "")
-    # 呼吸 = Edipeak が数値に更新されたとき（「***」になったのは呼吸ではない）
+    # Breath = Edipeak updated to a number (changing to "***" is not a breath)
     peak_events = [p for p in peak_events if not abnormal[p] and peak_str[p] not in ("", NO_VALUE, "nan")]
     min_events = [m for m in min_events if not abnormal[m]]
     df["EdiPeak_Update"] = 0
@@ -464,7 +464,7 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
     df["Edimin_Update"] = 0
     df.loc[min_events, "Edimin_Update"] = 1
 
-    # 呼吸の始まり: Edipeak の更新の直前（max_onset_lag_sec 以内）の Edimin の更新
+    # Breath onset: the Edimin update just before the Edipeak update (within max_onset_lag_sec)
     onsets, paired = [], []
     prev_p = -1
     for p in peak_events:
@@ -475,7 +475,7 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
         prev_p = p
     typical_lag = int(round(np.median(paired))) if paired else int(round(0.4 * fps))
     starts, estimated = [], []
-    cut_at_start = False   # 最初の呼吸の始まりが録画の先頭より前（途中から始まる呼吸）
+    cut_at_start = False   # the first breath's onset is before the start of the recording (breath cut at the start)
     for p, o in zip(peak_events, onsets):
         s = (o if o is not None else p - typical_lag) + shift
         if not starts and s < 0:
@@ -493,24 +493,24 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
     df["BreathNumber"] = df["BreathMark"].cumsum()
     lead = not starts or starts[0] > 0
     if lead:
-        df["BreathNumber"] += 1          # 最初の区切りより前は呼吸1（途中から始まる呼吸）
+        df["BreathNumber"] += 1          # frames before the first boundary are breath 1 (breath cut at the start)
     df["Time"] = df["Frame"].apply(lambda f: _format_time(f, fps))
 
-    # 数値（「***」は NaN）
+    # Numeric values ("***" becomes NaN)
     for key in OCR_KEYS:
         if key in df:
             df[f"{key}_Value"] = pd.to_numeric(df[key].where(df[key].astype(str) != NO_VALUE), errors="coerce")
 
-    # --- ペン先の位置 ---
+    # --- Pen-tip position ---
     sw = fit_sweep(df["Sweep_Raw"].to_numpy(float) if "Sweep_Raw" in df else np.full(n, np.nan), fps)
     W = Settings.SWEEP_X_RIGHT - Settings.SWEEP_X_LEFT
     df["Sweep_U"] = np.round(sw["tip_u"], 2)
     df["Sweep_X"] = np.round(Settings.SWEEP_X_LEFT + np.mod(sw["tip_u"], W), 1)
     df["Sweep_Detected"] = sw["detected"].astype(int)
-    df["Sweep_Rate"] = round(sw["speed"] * fps, 4)  # px/秒
+    df["Sweep_Rate"] = round(sw["speed"] * fps, 4)  # px/s
     print(f"[post_ocr] sweep {sw['speed'] * fps:.2f} px/s, detected {sw['detected'].mean() * 100:.1f}% of frames")
 
-    # --- 呼吸ごとの表 ---
+    # --- Per-breath table ---
     est_of = {s: e for s, e in zip(starts, estimated)}
     peak_set = set(peak_events)
     rows = []
@@ -520,7 +520,7 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
         normal = g[g["Abnormal"] == 0]
         nxt = groups[k + 1][1] if k + 1 < len(groups) else None
         nxt_normal = nxt[nxt["Abnormal"] == 0] if nxt is not None else None
-        # この呼吸の Edipeak の更新（呼吸の中の最初の更新）〜次の呼吸の Edipeak の更新の前
+        # From this breath's Edipeak update (the first update within the breath) to just before the next breath's Edipeak update
         p = next((i for i in range(s, e + 1) if i in peak_set), None)
         q = next((i for i in range(e + 1, n) if i in peak_set), n)
         row = {
@@ -532,31 +532,31 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
             "Start_Time": round(float(df.at[s, "Frame"]) / fps, 2),
             "End_Time": round(float(df.at[e, "Frame"] + 1) / fps, 2),
         }
-        # Edipeak: この呼吸の更新で表示された値
+        # Edipeak: the value shown by this breath's update
         if p is not None:
             seg = df.iloc[p:q]
             row["EdiPeak"] = _mode(seg.loc[seg["Abnormal"] == 0, "EdiPeak_Value"])
             row["EdiPeak_Frame"] = int(df.at[p, "Frame"])
         else:
             row["EdiPeak"], row["EdiPeak_Frame"] = np.nan, np.nan
-        # Edimin: この呼吸の呼気の最小値 = 次の呼吸の始まりで表示される値。*_displayed はこの呼吸の間に表示されていた値
+        # Edimin: minimum of this breath's expiration = value shown at the next breath's onset. *_displayed is the value shown during this breath
         row["Edimin"] = _mode(nxt_normal["Edimin_Value"]) if nxt_normal is not None and "Edimin_Value" in df else np.nan
         row["Edimin_displayed"] = _mode(normal["Edimin_Value"]) if "Edimin_Value" in df else np.nan
         row["Onset_Estimated"] = int(est_of.get(s, False)) if s in est_of else np.nan
         row["Edi_Scale"] = scale_max
         alerts = []
         if k == 0 and (lead or cut_at_start):
-            alerts.append("Fragment")   # 録画の途中から始まる呼吸
+            alerts.append("Fragment")   # breath already in progress when the recording starts
         if nxt is None:
-            alerts.append("Fragment")   # 録画の終わりで切れている呼吸
+            alerts.append("Fragment")   # breath cut off at the end of the recording
         if g["Scale_Changed"].any():
-            alerts.append("ScaleChanged")  # 縦軸の上限が変わっている（波形は出力しない）
+            alerts.append("ScaleChanged")  # vertical-axis upper limit has changed (no waveform output)
         if g["Abnormal"].any():
             alerts.append("Abnormal")
         if row["Onset_Estimated"] == 1:
             alerts.append("OnsetEstimated")
         if "EdiPeak" in g and (g["EdiPeak"].astype(str) == NO_VALUE).any():
-            alerts.append("NoBreathDetected")  # 呼吸器が約10秒呼吸を検出しなかった（「***」）
+            alerts.append("NoBreathDetected")  # ventilator detected no breath for about 10 s ("***")
         row["Alert"] = ",".join(dict.fromkeys(alerts))
         row["Abnormal"] = int(g["Abnormal"].any())
         row["E_min"], row["E_max"] = 0.0, float(row["Edi_Scale"])
@@ -586,10 +586,10 @@ def _fill_small_gaps(v, max_gap):
 
 
 def extract_column_y(frame, xs):
-    """画面の列 xs（screen x）ごとの Edi の y。
+    """Edi y for each screen column xs (screen x).
 
     Returns:
-        (その色の画素の y の中央値, 最も上の y, 最も下の y)。画素が無い列・EDI_SKIP_X の列は NaN
+        (median y of pixels of that color, topmost y, bottommost y). NaN for columns with no pixels and EDI_SKIP_X columns
     """
     mask = edi_mask(frame)
     for a, b in Settings.EDI_SKIP_X:
@@ -604,31 +604,31 @@ def extract_column_y(frame, xs):
 
 
 def y_to_edi(y, scale):
-    """画面の y → Edi（µV）。"""
+    """Screen y → Edi (µV)."""
     return (Settings.EDI_Y_ZERO - y) * scale / (Settings.EDI_Y_ZERO - Settings.EDI_Y_TOP)
 
 
 def finish_wave(cols, scale, xs=None):
-    """列ごとの y（extract_column_y の結果）→ Edi（µV）。
+    """Per-column y (result of extract_column_y) → Edi (µV).
 
-    縦軸をはみ出して描かれていない列（頭打ち）:
-      - 両隣の列の線が上端（下端）に達していれば、上限（下限）の値にする
-      - 片側だけ上端に達している（もう片側は右端のバー・左上の目盛りに隠れて下りてきた後など）ときは、
-        上限の値から反対側の値まで直線でつなぐ
+    Columns not drawn because the trace exceeds the vertical axis (clipping):
+      - if the trace in the neighboring columns on both sides reaches the top (bottom) edge, use the upper (lower) limit value
+      - if only one side reaches the top edge (e.g. the other side is after the trace came back down while hidden by the right-edge bar or the top-left scale label),
+        connect linearly from the upper-limit value to the value on the other side
 
     Returns:
-        (値の配列, 上端で頭打ちになった点の数)
+        (array of values, number of points clipped at the top edge)
     """
     top = Settings.EDI_Y_TOP + Settings.EDI_CLIP_MARGIN
     bottom = Settings.EDI_ROWS[1] - 1 - Settings.EDI_CLIP_MARGIN
     ys, ymin, ymax = (np.asarray(c, float).copy() for c in cols)
     xs = np.asarray(xs) if xs is not None else np.full(len(ys), -1)
     ox0, ox1, oy = Settings.EDI_LABEL_OCCLUSION
-    top_of = np.where((xs >= ox0) & (xs <= ox1), max(oy, top), top)  # 列ごとの「上端に達した」の基準
+    top_of = np.where((xs >= ox0) & (xs <= ox1), max(oy, top), top)  # per-column threshold for "reached the top edge"
     clipped = 0
     nan = ~np.isfinite(ys)
     for a, b in _runs(nan):
-        # 両隣（それぞれ近い3列。線の縁の小さな画素の塊に惑わされないように）
+        # Both neighbors (the nearest 3 columns on each side, so small pixel clusters at the trace edge do not mislead)
         left = [j for j in range(a - 1, a - 4, -1) if j >= 0 and np.isfinite(ys[j])]
         right = [j for j in range(b + 1, b + 4) if j < len(ys) and np.isfinite(ys[j])]
         sides = [s for s in (left, right) if s]
@@ -636,7 +636,7 @@ def finish_wave(cols, scale, xs=None):
         if sides and all(at_top):
             ys[a:b + 1] = Settings.EDI_Y_TOP
         elif sides and all(max(ymax[j] for j in s) >= bottom for s in sides):
-            ys[a:b + 1] = Settings.EDI_ROWS[1] - 1   # 0 µV 付近で線がパネルの下の縁に重なった（頭打ちには数えない）
+            ys[a:b + 1] = Settings.EDI_ROWS[1] - 1   # trace near 0 µV overlapped the panel's bottom edge (not counted as clipping)
             continue
         elif len(sides) == 2 and any(at_top):
             y_left = Settings.EDI_Y_TOP if at_top[0] else ys[left[0]]
@@ -651,8 +651,8 @@ def finish_wave(cols, scale, xs=None):
 
 
 def _frames_to_read(df_breaths, pos_of_frame, tip_u, abnormal, max_len):
-    """extract_waves が読む画像（df_frames の行の位置）。画像は読まずに、extract_waves と同じ手順で数える。
-    終了の直後の画像（e+1, e+2）は、読めなかった列があるときだけ使うが、それは画像を読むまで分からないので含めておく。"""
+    """Images extract_waves will read (row positions in df_frames). Counted by the same steps as extract_waves, without reading images.
+    The images right after the end (e+1, e+2) are used only when some columns could not be read, which is unknown until images are read, so they are included."""
     want = set()
     n = len(tip_u)
     for _, b in df_breaths.iterrows():
@@ -694,20 +694,20 @@ def _read_frame(frames_root, frame_no):
 def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
                   settings={}, overwrite=False, archive_dir=None):
     """
-    呼吸ごとの波形CSV（列: X, Edi）を output_dir/<BreathNumber>.csv に書き出す。
+    Write a per-breath waveform CSV (columns: X, Edi) to output_dir/<BreathNumber>.csv.
 
-    呼吸の開始時のペン先の次の列〜終了時のペン先の列を、呼吸の最後のフレームの画像から切り出す。
-    1周（約5.4秒）より長い呼吸は、足りない前の部分をそれより前のフレームの画像から切り出してつなぐ。
-    各点の時刻 = Wave_T0 + 行番号 / Wave_Rate（秒、動画の先頭から）。
+    The columns from the one after the pen tip at breath start to the pen tip at breath end are cut out from the image of the breath's last frame.
+    For breaths longer than one sweep (about 5.4 s), the missing earlier part is cut out from images of earlier frames and joined.
+    Time of each point = Wave_T0 + row number / Wave_Rate (seconds from the start of the video).
 
     Returns:
-        (CSV を書き出した呼吸の数, df_breaths)
+        (number of breaths whose CSV was written, df_breaths)
     """
     opts = settings.get("post_ocr", {})
     fps = float(opts.get("fps", 10))
     os.makedirs(output_dir, exist_ok=True)
     W = Settings.SWEEP_X_RIGHT - Settings.SWEEP_X_LEFT
-    max_len = W - Settings.SWEEP_ERASE_MARGIN  # 1枚の画像から読める列の数（ペン先の前の消去帯と、1周前の波形を除く）
+    max_len = W - Settings.SWEEP_ERASE_MARGIN  # number of columns readable from one image (excluding the erase band ahead of the pen tip and the waveform from one sweep earlier)
 
     df_frames = df_frames.reset_index(drop=True)
     tip_u = df_frames["Sweep_U"].to_numpy(float)
@@ -724,9 +724,9 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
     alerts = df_breaths["Alert"].fillna("").astype(str).tolist()
     written = 0
 
-    # 0.2.0（engine_api 3）: 使う画像を先に、番号の小さい順に開いておく。アプリは開かれた画像を区間動画から作り、
-    # 前へ進む読み方なら位置を指定し直さずに読み進められる。下の処理は呼吸ごとに終了画像から後ろへ戻りながら読むので、
-    # そのままだと区間動画のシークが起きる
+    # 0.2.0 (engine_api 3): open the images to be used up front, in ascending frame order. The app creates opened images from the segment video,
+    # and forward reading proceeds without re-seeking. The processing below reads backward from each breath's end image,
+    # which would otherwise cause seeks in the segment video
     for f in sorted(_frames_to_read(df_breaths, pos_of_frame, tip_u, abnormal, max_len)):
         os.path.isfile(os.path.join(frames_root, f"frame_{int(frame_no[f]):08d}.jpg"))
 
@@ -742,7 +742,7 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
                 new_cols[c].append(rec[c])
             continue
 
-        # 波形の範囲（通しの位置）: (前のフレームのペン先, 最後のフレームのペン先]
+        # Waveform range (continuous position): (pen tip of the previous frame, pen tip of the last frame]
         u_start = tip_u[s - 1] if s > 0 else tip_u[s]
         first = int(np.floor(u_start)) + 1
         last = int(np.floor(tip_u[e]))
@@ -751,13 +751,13 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
                 new_cols[c].append(rec[c])
             continue
 
-        # 後ろから順に、各列がまだ消されていない画像から切り出す
+        # Working backward, cut out each column from an image in which it has not yet been erased
         ys = np.full((3, last - first + 1), np.nan)
         hi, f, used = last, e, 0
         while hi >= first and 0 <= f <= e:
             tip = int(np.floor(tip_u[f]))
             lo = max(first, tip - max_len + 1)
-            top = min(hi, tip)                 # この画像でまだ描かれていない列（ペン先より先）は読まない
+            top = min(hi, tip)                 # do not read columns not yet drawn in this image (beyond the pen tip)
             frame = _read_frame(frames_root, frame_no[f]) if lo <= top else None
             if frame is not None:
                 u = np.arange(lo, top + 1)
@@ -766,12 +766,12 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
             if lo > hi:
                 break
             hi = lo - 1
-            # 次の画像: 列 hi を描いた直後（少し余裕をみて20px先まで描いた）フレーム。異常なフレームは避ける
+            # Next image: the frame just after column hi was drawn (with some margin: drawn up to 20 px beyond). Avoid abnormal frames
             nf = min(int(np.searchsorted(tip_u, hi + 20)), f - 1)
             while nf >= 0 and abnormal[nf]:
                 nf -= 1
             f = nf
-        # ペン先のすぐ手前は描き終わっていないことがある: 読めなかった列だけ、直後のフレームの画像から補う
+        # Just behind the pen tip may not be fully drawn yet: fill only the unread columns from images of the following frames
         for nf in (e + 1, e + 2):
             missing = ~np.isfinite(ys[0])
             if not missing.any() or nf >= len(frame_no) or abnormal[nf]:
@@ -793,7 +793,7 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
             wave.to_csv(path, index=False)
         written += 1
 
-        # 最初の点が描かれた時刻: ペン先が first に達した時刻（各フレームのペン先の位置から内挿）
+        # Time the first point was drawn: time the pen tip reached first (interpolated from per-frame pen-tip positions)
         rec["Wave_T0"] = round(float(np.interp(first, tip_u, times)), 4)
         rec["Wave_Rate"] = round(rate, 4)
         rec["Wave_Points"] = len(u)
