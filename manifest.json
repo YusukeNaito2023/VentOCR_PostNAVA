@@ -37,12 +37,12 @@
       { "name": "Clipped_Points",   "label": "Clipped points" }
     ],
     "alerts": [
-      { "name": "Fragment",         "label": { "ja": "録画の最初・最後で途中から始まる・切れている呼吸", "en": "Cut at the start or end of the recording" }, "exclude_from_accuracy": true },
-      { "name": "ScaleChanged",     "label": { "ja": "呼吸の途中で Edi の縦軸の上限が変わった（波形は出さない）", "en": "Edi axis range changed during the breath (no waveform)" }, "exclude_from_accuracy": true },
-      { "name": "Abnormal",         "label": { "ja": "Edi モニタ以外の画面・ポップアップのフレームを含む", "en": "Contains frames of another screen or a popup" }, "exclude_from_accuracy": true },
-      { "name": "OnsetEstimated",   "label": { "ja": "Edimin の表示の更新が見えず、呼吸の始まりを推定した", "en": "Edimin update not seen; breath onset estimated" }, "exclude_from_accuracy": false },
-      { "name": "NoBreathDetected", "label": { "ja": "呼吸器が呼吸を検出しなかった（Edipeak が「***」）", "en": "The ventilator detected no breath (Edipeak \"***\")" }, "exclude_from_accuracy": true },
-      { "name": "Clipped",          "label": { "ja": "波形が縦軸の上限を超えて切れている", "en": "Waveform clipped at the top of the axis" }, "exclude_from_accuracy": true }
+      { "name": "Fragment",         "label": "Cut at the start or end of the recording", "exclude_from_accuracy": true },
+      { "name": "ScaleChanged",     "label": "Edi axis range changed during the breath (no waveform)", "exclude_from_accuracy": true },
+      { "name": "Abnormal",         "label": "Contains frames of another screen or a popup", "exclude_from_accuracy": true },
+      { "name": "OnsetEstimated",   "label": "Edimin update not seen; breath onset estimated", "exclude_from_accuracy": false },
+      { "name": "NoBreathDetected", "label": "The ventilator detected no breath (Edipeak \"***\")", "exclude_from_accuracy": true },
+      { "name": "Clipped",          "label": "Waveform clipped at the top of the axis", "exclude_from_accuracy": true }
     ]
   },
 
