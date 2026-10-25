@@ -27,7 +27,7 @@ from tqdm import tqdm
 
 from . import Settings
 
-ENGINE_VERSION = "0.1.1"
+ENGINE_VERSION = "0.2.0"
 VENTOCR_TESTED = "0.5.5"
 
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -330,7 +330,7 @@ def _phase_track(tip, valid, speed, W, window, block, trim):
     return centers[ok], np.unwrap(ph[ok] / W * 2 * np.pi) / (2 * np.pi) * W
 
 
-def fit_sweep(tip_raw, fps, window=150, block=25, trim=25, tol=12):
+def fit_sweep(tip_raw, fps, window=None, block=None, trim=25, tol=12):
     """各フレームのペン先の位置を求める。
 
     掃引は一定の速さなので、tip ≒ speed*i + phase (mod W)。区間ごとに位相の代表値を求めて（外れ値に強い円周平均）
@@ -346,6 +346,9 @@ def fit_sweep(tip_raw, fps, window=150, block=25, trim=25, tol=12):
         )
     """
     W = Settings.SWEEP_X_RIGHT - Settings.SWEEP_X_LEFT
+    # 0.2.0: 区間の幅（フレーム数）は秒から求める（10 fps で 0.1.x と同じ 150 / 25 / 20 フレーム）。trim・tol は画素
+    window = window if window is not None else max(1, round(15.0 * fps))
+    block = block if block is not None else max(1, round(2.5 * fps))
     n = len(tip_raw)
     tip = np.asarray(tip_raw, float) - Settings.SWEEP_X_LEFT
     valid = np.isfinite(tip)
@@ -355,7 +358,7 @@ def fit_sweep(tip_raw, fps, window=150, block=25, trim=25, tol=12):
         return {"tip_u": speed * idx, "speed": speed, "detected": np.zeros(n, bool)}
 
     # 速さの粗い推定: lag フレーム離れた2点の進み（折り返しは mod で吸収）の中央値
-    lag = 20
+    lag = max(1, round(2.0 * fps))
     if n > lag:
         both = valid[:-lag] & valid[lag:]
         if both.sum() >= 20:
@@ -647,6 +650,41 @@ def finish_wave(cols, scale, xs=None):
     return vals, clipped
 
 
+def _frames_to_read(df_breaths, pos_of_frame, tip_u, abnormal, max_len):
+    """extract_waves が読む画像（df_frames の行の位置）。画像は読まずに、extract_waves と同じ手順で数える。
+    終了の直後の画像（e+1, e+2）は、読めなかった列があるときだけ使うが、それは画像を読むまで分からないので含めておく。"""
+    want = set()
+    n = len(tip_u)
+    for _, b in df_breaths.iterrows():
+        s = pos_of_frame.get(int(b["Frame"]))
+        e = pos_of_frame.get(int(b["End_Frame"]))
+        if s is None or e is None or int(b.get("Abnormal", 0)) == 1:
+            continue
+        u_start = tip_u[s - 1] if s > 0 else tip_u[s]
+        first = int(np.floor(u_start)) + 1
+        last = int(np.floor(tip_u[e]))
+        if last < first:
+            continue
+        hi, f = last, e
+        while hi >= first and 0 <= f <= e:
+            tip = int(np.floor(tip_u[f]))
+            lo = max(first, tip - max_len + 1)
+            if lo <= min(hi, tip):
+                want.add(f)
+            if lo > hi:
+                break
+            hi = lo - 1
+            nf = min(int(np.searchsorted(tip_u, hi + 20)), f - 1)
+            while nf >= 0 and abnormal[nf]:
+                nf -= 1
+            f = nf
+        for nf in (e + 1, e + 2):
+            if nf >= n or abnormal[nf]:
+                break
+            want.add(nf)
+    return want
+
+
 def _read_frame(frames_root, frame_no):
     path = os.path.join(frames_root, f"frame_{int(frame_no):08d}.jpg")
     img = cv2.imread(path) if os.path.isfile(path) else None
@@ -685,6 +723,12 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
                                 "Start_File_Name", "End_File_Name")}
     alerts = df_breaths["Alert"].fillna("").astype(str).tolist()
     written = 0
+
+    # 0.2.0（engine_api 3）: 使う画像を先に、番号の小さい順に開いておく。アプリは開かれた画像を区間動画から作り、
+    # 前へ進む読み方なら位置を指定し直さずに読み進められる。下の処理は呼吸ごとに終了画像から後ろへ戻りながら読むので、
+    # そのままだと区間動画のシークが起きる
+    for f in sorted(_frames_to_read(df_breaths, pos_of_frame, tip_u, abnormal, max_len)):
+        os.path.isfile(os.path.join(frames_root, f"frame_{int(frame_no[f]):08d}.jpg"))
 
     for k, b in df_breaths.iterrows():
         rec = dict.fromkeys(new_cols, np.nan)
