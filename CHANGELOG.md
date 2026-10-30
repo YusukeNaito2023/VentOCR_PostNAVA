@@ -1,6 +1,25 @@
 # CHANGELOG
 
-## 0.3.0 (2026-10-30)
+## 0.3.1 (2026-10-30)
+Breath onsets from the Edi trace, and implausible Edipeak / Edimin reads left empty. Released together with 0.3.0 (0.3.0 was not published).
+
+- Onsets: up to 0.3.0 a breath started at the Edimin update - 0.3 s. On validation video 14-58-39 the Edimin update came 0.3-1.6 s before the Edipeak update and often well into the rise, so by eye about 14 of 48 breaths started partway up the rise or ended partway up the next rise. Now:
+  - `initial_ocr` records the Edi trace just behind the pen tip in each frame (Frames.csv `Pen_Y`, the newest `Settings.PEN_COLUMNS` = 4 columns; the Edi mask is shared with the pen-tip detection, no extra image work). With the frame's scale this is Edi at 10 Hz.
+  - `post_ocr` places each onset on that trace (`_wave_onset`): the breath's peak is the highest point in the `peak_search_sec` (1.5 s) before its Edipeak update, the trough the lowest point after the previous breath's Edipeak update, and the onset the last frame within max(0.3 µV, 10% of the rise) of the trough. Where the trace does not show it (less than 60% of the frames seen, or a rise under 1 µV), the Edimin update or the typical lag is used as before. Breaths.csv `Onset_Source`: `wave`, `edimin` or `estimated`.
+  - A fallback onset is never before the previous breath's Edipeak update. Before, an estimated onset could be, and that update then fell into the next breath: the breaths shifted by one (validation video 14-58-39, 0.3.0: 17 breaths without their own Edipeak, e.g. around breath 98).
+  - `max_onset_lag_sec` 1.5 -> 2.5 s (Edimin update to Edipeak update up to 1.6 s on 14-58-39).
+- OCR: a read that is not what the Servo-U shows (1-2 digits and one decimal) is left empty. EasyOCR sometimes returned the decimal point as a digit in its own box ("233, 8" for 23.8 became 233.8; breath 214 of 14-58-39 shows 28.8 and was 283.8) or an extra digit ("7.77"). Values of 100 µV or more are therefore never read. Digit templates (as in NAVA) were not made. An Edipeak update whose value was not read still counts as a breath (it was dropped before).
+
+### Check (installed VentOCR app, CLI, 10 fps, 2026-10-30; other analyses were running, load average 26-59)
+- Validation video 14-58-39 (1 h; 623 s): 933 breaths as in 0.3.0. 0.3.0 -> 0.3.1, on the breaths without excluded alerts (866 -> 882):
+  - breaths starting above 20% of their rise (first point vs the Edimin shown, relative to Edipeak): 37.8% -> 10.0%; ending above 20% of the next rise: 34.5% -> 9.6%
+  - Edipeak vs waveform maximum within 10%: 92.6% -> 95.2% (95th percentile of the relative difference +22% -> +6%); within 1 µV 92.4% -> 95.0%
+  - onsets: 841 from the trace, 88 Edimin updates, 3 estimated (0.3.0: 288 estimated)
+  - Edipeak of 100 µV or more: 3 -> 0 (now empty: breaths 214, 215, 821, 916); breaths with an empty Edipeak 22 -> 5
+- By eye, the same 48 random breaths: boundaries partway up a rise about 14 -> 2-3 (left: 684, 686, and 337 slightly late); Wave_Max within 10% of Edipeak 46 -> 47.
+- Sample video (306 s; 88 s): 96 breaths, EdiPeak identical, Edimin identical on 94 (2 moved with their boundary); starts moved by median +0.1 s (5-95%: -0.35 to +0.2 s); Wave_Max within 10% of Edipeak 84.8% -> 87.5% (33 / 32 breaths without excluded alerts; most of the sample is clipped).
+
+## 0.3.0 (2026-10-30, not published)
 The Edi scale is read from the axis label on every image. Up to 0.2.0 the scale was fixed at 20 µV (`edi_scale_max`) and a frame whose label differed from the "20" reference image was marked Abnormal.
 
 - The Servo-U auto-scales the Edi axis: in the validation videos (2026-10-24, Servo-U Edi monitor in standby, 1920x1080, 8 h) the label changes every few to tens of seconds, between 5 and 80 µV. When it changes, the whole visible trace is redrawn at the new scale in the same frame (checked on the frames around changes at 16.4 s and 25.1 s of video 14-58-39; the pen keeps its position).

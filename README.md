@@ -7,11 +7,16 @@
 ## Description
 - **OCR**: Edipeak and Edimin (values on the right). Only frames where the display changed are OCR'd
   - If no breath is detected for about 10 s, both become "***" (no value; `NoBreathDetected` in that breath's Alert)
-- **1 breath** = from an Edimin display update to the next breath's Edimin update
+  - A read that is not what the Servo-U shows (1-2 digits and one decimal, e.g. "233, 8" when the decimal point is read as a digit) is left empty, so values of 100 µV or more are never read
+- **1 breath** = from the onset of an Edi rise to the next breath's onset; breaths are the ones the Servo-U detects (Edipeak display updates)
   - The Servo-U updates Edimin when Edi rises (onset of neural inspiration), and Edipeak after Edi passes its peak and starts to fall (about 0.35 s later)
   - When a value equals the previous one the display does not change and the update is invisible, so breaths are counted by Edipeak updates, and the Edimin update just before each (within `max_onset_lag_sec`) is taken as the onset.
     If it is invisible, the onset is estimated from the typical lag (0.4 s in the sample) (`OnsetEstimated` in Alert)
-  - The Edimin update lags slightly behind the Edi rise (median 0.1 s after passing 20% of the height), so the boundary is placed `onset_shift_sec` (default -0.3 s) earlier
+  - 0.3.1: the onset is placed on the Edi trace itself (`Onset_Source` = `wave`): the Edi just behind the pen tip in each frame (Frames.csv `Pen_Y`) gives Edi at 10 Hz;
+    the breath's peak is the highest point in the `peak_search_sec` (1.5 s) before its Edipeak update, the trough the lowest point after the previous breath's Edipeak update,
+    and the onset the last frame within max(0.3 µV, 10% of the rise) of the trough. Where the trace does not show it, the Edimin update (`edimin`) or the typical lag (`estimated`)
+    is used, `onset_shift_sec` (default -0.3 s) earlier, and never before the previous breath's Edipeak update.
+    The Edimin update can come well into the rise (validation video 14-58-39: 0.3-1.6 s before the Edipeak update), which made breaths start partway up the rise up to 0.3.0
 - **Values in Breaths.csv**
   - `EdiPeak`: the Edipeak shown for that breath
   - `Edimin`: minimum of that breath's expiration = the Edimin shown at the next breath's onset (verified to match the waveform minimum).

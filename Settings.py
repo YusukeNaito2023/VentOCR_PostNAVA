@@ -40,6 +40,7 @@ SWEEP_GAP_MIN = 15            # width of a blank treated as the erase band (px)
 SWEEP_GAP_MAX = 80
 SWEEP_GAP_X_MIN = 195         # blanks starting left of this are not used (indistinguishable from the scale-label band at the left edge)
 SWEEP_ERASE_MARGIN = 80       # range readable from one image = from the pen tip back to (one sweep − this width) (erase band ~40 px + margin for pen-tip estimation error)
+PEN_COLUMNS = 4               # 0.3.1: Edi at the time of a frame = median y of the trace in the newest this many columns behind the pen tip
 
 # ECG (used only to detect the sweep position)
 ECG_ROWS = (124, 212)

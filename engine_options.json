@@ -8,9 +8,10 @@
     "fps": 10,
     "edi_scale_max": 20,
     "min_breath_sec": 0.3,
-    "max_onset_lag_sec": 1.5,
+    "max_onset_lag_sec": 2.5,
     "onset_shift_sec": -0.3,
     "abnormal_screen_diff": 15.0,
-    "scale_fill_sec": 7.0
+    "scale_fill_sec": 7.0,
+    "peak_search_sec": 1.5
   }
 }

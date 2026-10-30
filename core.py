@@ -30,7 +30,7 @@ from tqdm import tqdm
 from . import Settings
 from . import axis_labels
 
-ENGINE_VERSION = "0.3.0"
+ENGINE_VERSION = "0.3.1"
 VENTOCR_TESTED = "0.5.5"
 
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -172,19 +172,32 @@ def edi_mask(frame):
     return mask
 
 
-def detect_pen_tip(frame, gray):
+def detect_pen_tip(frame, gray, mask=None):
     """Pen-tip x (screen coordinates): one column before the left edge of the columns where neither ECG nor Edi is drawn (erase band).
 
     NaN if no erase band is found (e.g. it overlaps the Edi bar at the right edge, or just after returning to the left edge).
+    mask: edi_mask(frame) when already computed.
     """
     x0, x1 = Settings.SWEEP_X_LEFT, Settings.SWEEP_X_RIGHT
     e0, e1 = Settings.ECG_ROWS
-    drawn = (gray[e0:e1, x0:x1] > Settings.ECG_GRAY_MIN).any(0) | edi_mask(frame)[:, x0:x1].any(0)
+    mask = edi_mask(frame) if mask is None else mask
+    drawn = (gray[e0:e1, x0:x1] > Settings.ECG_GRAY_MIN).any(0) | mask[:, x0:x1].any(0)
     gaps = [(a + x0, b + x0) for a, b in _runs(~drawn)
             if Settings.SWEEP_GAP_MIN <= b - a + 1 <= Settings.SWEEP_GAP_MAX and a + x0 >= Settings.SWEEP_GAP_X_MIN]
     if len(gaps) != 1:
         return np.nan
     return float(gaps[0][0] - 1)
+
+
+def pen_edi_y(mask, tip):
+    """0.3.1: screen y of the Edi trace just behind the pen tip (the newest PEN_COLUMNS columns), i.e. Edi at the time of the frame.
+    NaN when the pen tip is unknown or no trace pixel is there (e.g. clipped at the top, or behind the Edi bar)."""
+    if not np.isfinite(tip):
+        return np.nan
+    t = int(tip)
+    sub = mask[:, max(Settings.SWEEP_X_LEFT, t - Settings.PEN_COLUMNS + 1):t + 1]
+    rows = [np.median(np.flatnonzero(c)) for c in sub.T if c.any()]
+    return round(Settings.EDI_ROWS[0] + float(np.median(rows)), 1) if rows else np.nan
 
 
 # ============================================================
@@ -196,6 +209,9 @@ def _parse_ocr(result):
 
     "***" (no breath detected) sets the value to NO_VALUE. Values are shown with one decimal place, but the
     decimal point is sometimes missed, so a number of 2+ digits without a decimal point gets one inserted before the last digit (the raw string is kept in *_raw).
+    0.3.1: a value that is not what the Servo-U shows (1-2 digits, one decimal) is left empty: EasyOCR sometimes reads the decimal
+    point as a digit in a separate box ("233, 8" for 23.8 became 233.8; 3 of 933 breaths of validation video 14-58-39) or adds a
+    digit ("7.77"). Values of 100 µV or more are therefore never read.
     """
     texts = [t for _, t, _ in result]
     confs = [s for _, _, s in result]
@@ -209,7 +225,9 @@ def _parse_ocr(result):
         return "", raw, conf
     if "." not in digits and len(digits) >= 2:
         digits = digits[:-1] + "." + digits[-1]
-    return digits.rstrip("."), raw, conf
+    if not re.fullmatch(r"\d{1,2}\.\d", digits):
+        return "", raw, conf
+    return digits, raw, conf
 
 
 # ============================================================
@@ -227,7 +245,8 @@ def initial_ocr(frames, total_frames, subfolder, settings={},
     Returns:
         pd.DataFrame (columns: Frame, BreathMark,
                       EdiPeak, EdiPeak_raw, EdiPeak_conf, EdiPeak_Diff, Edimin, Edimin_raw, Edimin_conf, Edimin_Diff,
-                      OCR_Done, Sweep_Raw, Screen_Diff, Edi_Scale_Read)
+                      OCR_Done, Sweep_Raw, Pen_Y, Screen_Diff, Edi_Scale_Read)
+        Pen_Y: screen y of the Edi trace just behind the pen tip (0.3.1, used to place breath onsets)
         Edi_Scale_Read: upper limit of the Edi vertical axis read from its label (NaN when not read). The label is read again
         only when its box has changed since the last read
     """
@@ -273,7 +292,9 @@ def initial_ocr(frames, total_frames, subfolder, settings={},
                 row[key], row[f"{key}_raw"], row[f"{key}_conf"] = last_val[key]
 
             # --- Pen-tip position ---
-            row["Sweep_Raw"] = detect_pen_tip(frame, gray)
+            mask = edi_mask(frame)
+            row["Sweep_Raw"] = detect_pen_tip(frame, gray, mask)
+            row["Pen_Y"] = pen_edi_y(mask, row["Sweep_Raw"])
 
             # --- Is this the Edi monitor screen? (compare static text with the reference image) ---
             crop = _screen_crop(gray)
@@ -445,6 +466,51 @@ def _frame_scales(df, default, fill_gap):
     return out
 
 
+def _pen_edi(df, abnormal):
+    """0.3.1: Edi (µV) at the time of each frame, from the trace just behind the pen tip (Pen_Y) and the frame's scale.
+    NaN where not seen; gaps of up to 3 frames are interpolated."""
+    if "Pen_Y" not in df:
+        return np.full(len(df), np.nan)
+    y = pd.to_numeric(df["Pen_Y"], errors="coerce").to_numpy(float)
+    v = y_to_edi(y, df["Edi_Scale"].to_numpy(float))
+    v[abnormal] = np.nan
+    return _fill_small_gaps(v, 3)
+
+
+def _wave_onset(edi, a, p, peak_win, min_cover=0.6, min_height=1.0, rel=0.1, abs_thr=0.3):
+    """0.3.1: onset (row position) of the breath whose Edipeak update is at p, from the Edi trace; None when the trace does not show it.
+
+    The breath's peak is the highest point in the peak_win frames before p (the Servo-U updates Edipeak after Edi passes its
+    peak). The trough is the lowest point from a (the frame after the previous breath's Edipeak update) to the peak. The onset
+    is the last frame before the peak still within max(abs_thr, rel x rise) µV of the trough.
+    Up to 0.3.0 the onset was the Edimin update - 0.3 s; on validation video 14-58-39 the Edimin update came 0.3-1.6 s before
+    the Edipeak update and often well into the rise, so breaths started partway up the rise.
+    """
+    a = max(a, 0)
+    if p - a < 3:
+        return None
+    seg = edi[a:p + 1]
+    if np.isfinite(seg).mean() < min_cover:
+        return None
+    lo = max(0, len(seg) - 1 - peak_win)
+    top_part = seg[lo:]
+    if not np.isfinite(top_part).any():
+        return None
+    t_top = lo + int(np.nanargmax(top_part))
+    before = seg[:t_top + 1]
+    if not np.isfinite(before).any():
+        return None
+    trough = np.nanmin(before)
+    height = seg[t_top] - trough
+    if not height >= min_height:
+        return None
+    thr = trough + max(abs_thr, rel * height)
+    low = np.flatnonzero(before <= thr)
+    if not len(low):
+        return None
+    return a + int(low[-1])
+
+
 def post_ocr(df, Analyze_Id, user_ID, settings={}):
     """
     Find breath boundaries (Edipeak/Edimin display updates) and assign breath numbers and pen-tip positions.
@@ -457,7 +523,7 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
     fps = float(opts.get("fps", 10))
     diff_thresh = float(ocr_opts.get("diff_thresh", 2.0))
     min_gap = max(1, int(round(float(opts.get("min_breath_sec", 0.3)) * fps)))
-    max_lag = int(round(float(opts.get("max_onset_lag_sec", 1.5)) * fps))
+    max_lag = int(round(float(opts.get("max_onset_lag_sec", 2.5)) * fps))
     shift = int(round(float(opts.get("onset_shift_sec", -0.3)) * fps))
     abnormal_thresh = float(opts.get("abnormal_screen_diff", 15.0))
     scale_max = float(opts.get("edi_scale_max", Settings.EDI_DEFAULT_SCALE))
@@ -477,8 +543,9 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
     min_events = _display_events(df, "Edimin", diff_thresh, min_gap) if "Edimin_Diff" in df else []
     abnormal = df["Abnormal"].to_numpy() == 1
     peak_str = df["EdiPeak"].astype(str).to_numpy() if "EdiPeak" in df else np.full(n, "")
-    # Breath = Edipeak updated to a number (changing to "***" is not a breath)
-    peak_events = [p for p in peak_events if not abnormal[p] and peak_str[p] not in ("", NO_VALUE, "nan")]
+    # Breath = Edipeak updated to a number (changing to "***" is not a breath). 0.3.1: an update whose value was not read
+    # (empty) is still a breath; up to 0.3.0 it was dropped
+    peak_events = [p for p in peak_events if not abnormal[p] and peak_str[p] != NO_VALUE]
     min_events = [m for m in min_events if not abnormal[m]]
     df["EdiPeak_Update"] = 0
     df.loc[peak_events, "EdiPeak_Update"] = 1
@@ -495,10 +562,24 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
             paired.append(p - cand[-1])
         prev_p = p
     typical_lag = int(round(np.median(paired))) if paired else int(round(0.4 * fps))
-    starts, estimated = [], []
+    # 0.3.1: the onset is placed where the Edi trace starts to rise (_wave_onset); the Edimin update (or the typical lag) only
+    # where the trace does not show it
+    edi = _pen_edi(df, abnormal)
+    peak_win = max(1, int(round(float(opts.get("peak_search_sec", 1.5)) * fps)))
+    starts, estimated, sources = [], [], []
     cut_at_start = False   # the first breath's onset is before the start of the recording (breath cut at the start)
+    prev_p = -1
     for p, o in zip(peak_events, onsets):
-        s = (o if o is not None else p - typical_lag) + shift
+        w = _wave_onset(edi, prev_p + 1, p, peak_win)
+        if w is not None:
+            s, src = w, "wave"
+        else:
+            s, src = (o if o is not None else p - typical_lag) + shift, ("edimin" if o is not None else "estimated")
+            # never before the previous breath's Edipeak update (else that update falls into this breath and the
+            # breaths shift by one; seen with the estimated onset on validation video 14-58-39)
+            if prev_p >= 0:
+                s = max(s, prev_p + 1)
+        prev_p = p
         if not starts and s < 0:
             cut_at_start = True
         s = min(max(s, 0), n - 1)
@@ -507,7 +588,8 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
         if s >= n:
             continue
         starts.append(s)
-        estimated.append(o is None)
+        estimated.append(src == "estimated")
+        sources.append(src)
 
     df["BreathMark"] = 0
     df.loc[starts, "BreathMark"] = 1
@@ -533,6 +615,7 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
 
     # --- Per-breath table ---
     est_of = {s: e for s, e in zip(starts, estimated)}
+    src_of = dict(zip(starts, sources))
     peak_set = set(peak_events)
     rows = []
     groups = list(df.groupby("BreathNumber", sort=True))
@@ -564,6 +647,7 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
         row["Edimin"] = _mode(nxt_normal["Edimin_Value"]) if nxt_normal is not None and "Edimin_Value" in df else np.nan
         row["Edimin_displayed"] = _mode(normal["Edimin_Value"]) if "Edimin_Value" in df else np.nan
         row["Onset_Estimated"] = int(est_of.get(s, False)) if s in est_of else np.nan
+        row["Onset_Source"] = src_of.get(s, "")   # 0.3.1: wave (Edi trace), edimin (Edimin update) or estimated
         row["Edi_Scale"] = float(df.at[e, "Edi_Scale"])  # scale of the breath's last image (each image is converted with its own scale)
         alerts = []
         if k == 0 and (lead or cut_at_start):

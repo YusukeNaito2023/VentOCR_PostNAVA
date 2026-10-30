@@ -35,8 +35,13 @@ ENGINE_SETTINGS_SCHEMA = {
         },
         "max_onset_lag_sec": {
             "type": "float",
-            "default": 1.5,
+            "default": 2.5,
             "label": "Max lag from Edimin update (onset) to Edipeak update (sec)"
+        },
+        "peak_search_sec": {
+            "type": "float",
+            "default": 1.5,
+            "label": "Search the Edi peak this long before the Edipeak update (sec)"
         },
         "onset_shift_sec": {
             "type": "float",
