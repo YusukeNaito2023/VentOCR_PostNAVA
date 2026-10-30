@@ -22,10 +22,10 @@ SCREEN_CHECK_ROIS = [
 ]
 SCREEN_REFERENCE_IMAGE = "screen_reference.png"  # the regions above cropped from the reference image and placed side by side (grayscale)
 
-# Upper-limit label of the Edi vertical axis ("20"). Too small to OCR, so frames that differ from the reference image become Abnormal
-# (the vertical-axis upper limit is post_ocr.edi_scale_max in engine_options; default 20 µV)
-SCALE_LABEL_ROI = (152, 220, 30, 14)
-SCALE_REFERENCE_IMAGE = "scale_reference.png"
+# Upper-limit label of the Edi vertical axis ("20", "25", "30", ...). 0.3.0: read with whole-label templates (axis_labels.py; box
+# axis_labels.BOX). Built by tools/build_axis_labels.py from the key frames of the validation videos 2026-10-24 (Servo-U Edi monitor,
+# 1920x1080), labels checked by eye. Without this file every frame takes post_ocr.edi_scale_max (default 20 µV), as up to 0.2.0
+AXIS_LABEL_FILE = "axis_labels.npz"
 
 # ------------------------------------------------------------
 # Waveform drawing area and sweep

@@ -11,6 +11,6 @@
     "max_onset_lag_sec": 1.5,
     "onset_shift_sec": -0.3,
     "abnormal_screen_diff": 15.0,
-    "abnormal_scale_diff": 8.0
+    "scale_fill_sec": 7.0
   }
 }

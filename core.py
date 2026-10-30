@@ -1,6 +1,6 @@
 """PostNAVA (Servo-U Edi monitor screen) VentOCR Engine
 
-- OCR: Edipeak, Edimin (values on the right), and the upper limit of the Edi vertical axis (scale label)
+- OCR: Edipeak, Edimin (values on the right); templates: the upper limit of the Edi vertical axis (scale label, axis_labels.py)
 - 1 breath = from an Edimin display update (onset of neural inspiration) to the next breath's Edimin update
 - Waveform: Edi (only one)
 
@@ -15,6 +15,8 @@ The waveform screen sweeps left to right at a constant speed; on reaching the ri
 In each frame the blank ahead of the pen tip (erase band) is located and the pen-tip position recorded (initial_ocr);
 the sweep speed and phase are estimated from the whole video to determine the pen-tip position in each frame (post_ocr).
 A breath's waveform is cut out as the columns from the start pen tip to the end pen tip, from the last frame (and, for breaths longer than one sweep, earlier frames too) (extract_waves).
+The Servo-U changes the Edi scale often (auto-scaling) and then redraws the whole trace at the new scale in the same frame,
+so each image's columns are converted with the scale label read on that image.
 """
 import json
 import os
@@ -26,8 +28,9 @@ import pandas as pd
 from tqdm import tqdm
 
 from . import Settings
+from . import axis_labels
 
-ENGINE_VERSION = "0.2.0"
+ENGINE_VERSION = "0.3.0"
 VENTOCR_TESTED = "0.5.5"
 
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -137,20 +140,8 @@ def _load_reference(name):
     return None if img is None else img.astype(np.int16)
 
 
-def _scale_label_diff(frame, gray, ref):
-    """Difference between the vertical-axis upper-limit label and the reference image (excluding pixels overlapped by the Edi trace)."""
-    if ref is None:
-        return np.nan
-    x, y, w, h = Settings.SCALE_LABEL_ROI
-    crop = gray[y:y + h, x:x + w].astype(np.int16)
-    if crop.shape != ref.shape:
-        return np.nan
-    y0 = Settings.EDI_ROWS[0]
-    trace = edi_mask(frame)[y - y0:y - y0 + h, x:x + w] if y >= y0 else np.zeros(crop.shape, bool)
-    trace = cv2.dilate(trace.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
-    if trace.all():
-        return np.nan
-    return round(float(np.abs(crop - ref)[~trace].mean()), 2)
+def _label_reader():
+    return axis_labels.load_reader(ENGINE_DIR, Settings.AXIS_LABEL_FILE)
 
 
 def _format_time(frame, fps):
@@ -236,7 +227,9 @@ def initial_ocr(frames, total_frames, subfolder, settings={},
     Returns:
         pd.DataFrame (columns: Frame, BreathMark,
                       EdiPeak, EdiPeak_raw, EdiPeak_conf, EdiPeak_Diff, Edimin, Edimin_raw, Edimin_conf, Edimin_Diff,
-                      OCR_Done, Sweep_Raw, Screen_Diff, Scale_Diff)
+                      OCR_Done, Sweep_Raw, Screen_Diff, Edi_Scale_Read)
+        Edi_Scale_Read: upper limit of the Edi vertical axis read from its label (NaN when not read). The label is read again
+        only when its box has changed since the last read
     """
     opts = settings.get("initial_ocr", {})
     skip_keys = opts.get("skip_keys", [])
@@ -247,7 +240,8 @@ def initial_ocr(frames, total_frames, subfolder, settings={},
     print(f"GPU:{gpu_enabled}")
 
     screen_ref = _load_reference(Settings.SCREEN_REFERENCE_IMAGE)
-    scale_ref = _load_reference(Settings.SCALE_REFERENCE_IMAGE)
+    label_reader = _label_reader()
+    last_label_box, last_label = None, np.nan
     rois = Settings.ROIs
     keys = [k for k in rois if k not in skip_keys]
 
@@ -287,7 +281,16 @@ def initial_ocr(frames, total_frames, subfolder, settings={},
                 row["Screen_Diff"] = round(float(np.abs(crop.astype(np.int16) - screen_ref).mean()), 2)
             else:
                 row["Screen_Diff"] = np.nan
-            row["Scale_Diff"] = _scale_label_diff(frame, gray, scale_ref)
+            # --- Upper limit of the Edi vertical axis (0.3.0) ---
+            if label_reader is not None:
+                box = _crop(gray, axis_labels.BOX).astype(np.int16)
+                if last_label_box is None or np.abs(box - last_label_box).mean() > diff_thresh:
+                    v = label_reader.read(frame)
+                    last_label = np.nan if v is None else v
+                    last_label_box = box
+                row["Edi_Scale_Read"] = last_label
+            else:
+                row["Edi_Scale_Read"] = np.nan
 
             data.append(row)
             pbar.update(1)
@@ -422,6 +425,26 @@ def _display_events(df, key, diff_thresh, min_gap):
     return events
 
 
+def _frame_scales(df, default, fill_gap):
+    """Upper limit of the Edi vertical axis in each frame (0.3.0).
+
+    The label read in the frame (Edi_Scale_Read). A frame where it was not read (the trace crossing the label, a label being
+    redrawn) takes the read value only when the nearest reads before and after are the same and at most fill_gap frames apart
+    (default 7 s: a trace drawn across the label stays there for one sweep, about 5.5 s);
+    otherwise NaN (scale unknown, never a guess). Without the template file (axis_labels.npz) every frame takes `default`
+    (post_ocr.edi_scale_max), as up to 0.2.0.
+    """
+    if _label_reader() is None or "Edi_Scale_Read" not in df:
+        return np.full(len(df), default)
+    read = pd.to_numeric(df["Edi_Scale_Read"], errors="coerce").to_numpy(float)
+    out = read.copy()
+    known = np.flatnonzero(np.isfinite(read))
+    for a, b in zip(known[:-1], known[1:]):
+        if b - a > 1 and b - a <= fill_gap and read[a] == read[b]:
+            out[a + 1:b] = read[a]
+    return out
+
+
 def post_ocr(df, Analyze_Id, user_ID, settings={}):
     """
     Find breath boundaries (Edipeak/Edimin display updates) and assign breath numbers and pen-tip positions.
@@ -437,8 +460,8 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
     max_lag = int(round(float(opts.get("max_onset_lag_sec", 1.5)) * fps))
     shift = int(round(float(opts.get("onset_shift_sec", -0.3)) * fps))
     abnormal_thresh = float(opts.get("abnormal_screen_diff", 15.0))
-    scale_thresh = float(opts.get("abnormal_scale_diff", 8.0))
     scale_max = float(opts.get("edi_scale_max", Settings.EDI_DEFAULT_SCALE))
+    fill_gap = int(round(float(opts.get("scale_fill_sec", 7.0)) * fps))
 
     df = df.sort_values("Frame").reset_index(drop=True).copy()
     n = len(df)
@@ -446,10 +469,8 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
     # Frames that are not the Edi monitor screen
     screen = pd.to_numeric(df["Screen_Diff"], errors="coerce") if "Screen_Diff" in df else pd.Series(np.nan, index=df.index)
     df["Abnormal"] = (screen > abnormal_thresh).astype(int)
-    # Frames whose vertical-axis upper limit differs from the reference image (edi_scale_max): waveform values cannot be converted
-    scale_diff = pd.to_numeric(df["Scale_Diff"], errors="coerce") if "Scale_Diff" in df else pd.Series(np.nan, index=df.index)
-    df["Scale_Changed"] = (scale_diff > scale_thresh).astype(int)
-    df.loc[df["Scale_Changed"] == 1, "Abnormal"] = 1
+    # Upper limit of the Edi vertical axis in each frame (0.3.0)
+    df["Edi_Scale"] = _frame_scales(df, scale_max, fill_gap)
 
     # --- Display updates ---
     peak_events = _display_events(df, "EdiPeak", diff_thresh, min_gap) if "EdiPeak_Diff" in df else []
@@ -543,14 +564,12 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
         row["Edimin"] = _mode(nxt_normal["Edimin_Value"]) if nxt_normal is not None and "Edimin_Value" in df else np.nan
         row["Edimin_displayed"] = _mode(normal["Edimin_Value"]) if "Edimin_Value" in df else np.nan
         row["Onset_Estimated"] = int(est_of.get(s, False)) if s in est_of else np.nan
-        row["Edi_Scale"] = scale_max
+        row["Edi_Scale"] = float(df.at[e, "Edi_Scale"])  # scale of the breath's last image (each image is converted with its own scale)
         alerts = []
         if k == 0 and (lead or cut_at_start):
             alerts.append("Fragment")   # breath already in progress when the recording starts
         if nxt is None:
             alerts.append("Fragment")   # breath cut off at the end of the recording
-        if g["Scale_Changed"].any():
-            alerts.append("ScaleChanged")  # vertical-axis upper limit has changed (no waveform output)
         if g["Abnormal"].any():
             alerts.append("Abnormal")
         if row["Onset_Estimated"] == 1:
@@ -559,7 +578,8 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
             alerts.append("NoBreathDetected")  # ventilator detected no breath for about 10 s ("***")
         row["Alert"] = ",".join(dict.fromkeys(alerts))
         row["Abnormal"] = int(g["Abnormal"].any())
-        row["E_min"], row["E_max"] = 0.0, float(row["Edi_Scale"])
+        scales = df["Edi_Scale"].iloc[s:e + 1]
+        row["E_min"], row["E_max"] = 0.0, float(scales.max()) if scales.notna().any() else np.nan
         rows.append(row)
     df_breaths = pd.DataFrame(rows)
     if len(df_breaths):
@@ -715,6 +735,9 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
     times = df_frames["Frame"].to_numpy(float) / fps
     frame_no = df_frames["Frame"].to_numpy(int)
     abnormal = df_frames["Abnormal"].to_numpy(int) if "Abnormal" in df_frames else np.zeros(len(df_frames), int)
+    default_scale = float(opts.get("edi_scale_max", Settings.EDI_DEFAULT_SCALE))
+    frame_scale = (pd.to_numeric(df_frames["Edi_Scale"], errors="coerce").to_numpy(float) if "Edi_Scale" in df_frames
+                   else np.full(len(df_frames), default_scale))
     pos_of_frame = {int(f): i for i, f in enumerate(frame_no)}
 
     df_breaths = df_breaths.copy()
@@ -753,6 +776,8 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
 
         # Working backward, cut out each column from an image in which it has not yet been erased
         ys = np.full((3, last - first + 1), np.nan)
+        sc = np.full(last - first + 1, np.nan)   # 0.3.0: scale of the image each column was read from
+        unknown = False
         hi, f, used = last, e, 0
         while hi >= first and 0 <= f <= e:
             tip = int(np.floor(tip_u[f]))
@@ -762,6 +787,8 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
             if frame is not None:
                 u = np.arange(lo, top + 1)
                 ys[:, lo - first:top - first + 1] = extract_column_y(frame, Settings.SWEEP_X_LEFT + np.mod(u, W))
+                sc[lo - first:top - first + 1] = frame_scale[f]
+                unknown |= not np.isfinite(frame_scale[f])
                 used += 1
             if lo > hi:
                 break
@@ -774,7 +801,7 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
         # Just behind the pen tip may not be fully drawn yet: fill only the unread columns from images of the following frames
         for nf in (e + 1, e + 2):
             missing = ~np.isfinite(ys[0])
-            if not missing.any() or nf >= len(frame_no) or abnormal[nf]:
+            if not missing.any() or nf >= len(frame_no) or abnormal[nf] or not np.isfinite(frame_scale[nf]):
                 break
             tip = int(np.floor(tip_u[nf]))
             u = np.arange(first, last + 1)
@@ -783,10 +810,18 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
             if frame is not None:
                 cols = extract_column_y(frame, Settings.SWEEP_X_LEFT + np.mod(u[usable], W))
                 ys[:, usable] = cols
-        scale = float(b.get("Edi_Scale", Settings.EDI_DEFAULT_SCALE) or Settings.EDI_DEFAULT_SCALE)
+                sc[usable] = frame_scale[nf]
+        if unknown:
+            # an image without a readable scale label: its columns cannot be converted to µV (no waveform)
+            alerts[k] = ",".join(filter(None, [alerts[k], "ScaleUnknown"]))
+            for c in new_cols:
+                new_cols[c].append(rec[c])
+            continue
+        # columns not read (e.g. clipped) take the scale of the nearest read column
+        sc = pd.Series(sc).ffill().bfill().fillna(default_scale).to_numpy(float)
         u = np.arange(first, last + 1)
         xs = Settings.SWEEP_X_LEFT + np.mod(u, W)
-        vals, clipped = finish_wave(ys, scale, xs)
+        vals, clipped = finish_wave(ys, sc, xs)
         wave = pd.DataFrame({"X": u, "Edi": np.round(vals, 2)})
         path = os.path.join(output_dir, f"{int(b['BreathNumber'])}.csv")
         if overwrite or not os.path.exists(path):

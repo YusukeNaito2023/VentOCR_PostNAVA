@@ -26,7 +26,7 @@ ENGINE_SETTINGS_SCHEMA = {
         "edi_scale_max": {
             "type": "float",
             "default": 20,
-            "label": "Edi axis maximum on the screen (µV)"
+            "label": "Edi axis maximum, used only without the axis-label templates (µV)"
         },
         "min_breath_sec": {
             "type": "float",
@@ -48,10 +48,10 @@ ENGINE_SETTINGS_SCHEMA = {
             "default": 15.0,
             "label": "Abnormal frame threshold (screen label difference)"
         },
-        "abnormal_scale_diff": {
+        "scale_fill_sec": {
             "type": "float",
-            "default": 8.0,
-            "label": "Abnormal frame threshold (Edi axis label difference)"
+            "default": 7.0,
+            "label": "Fill an unread Edi axis label between equal reads up to (sec)"
         }
     }
 }

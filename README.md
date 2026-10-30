@@ -2,7 +2,7 @@
 
 ## Supported Devices
 - Servo-U "Edi monitor" screen (ECG at the top, Edi waveform in the middle, Edipeak / Edimin values on the right; e.g. after weaning from NAVA, in standby)
-- Videos recorded at 1280x720 (other resolutions are scaled to 1280x720 before reading)
+- Videos recorded at 1280x720 or 1920x1080 (other resolutions are scaled to 1280x720 before reading)
 
 ## Description
 - **OCR**: Edipeak and Edimin (values on the right). Only frames where the display changed are OCR'd
@@ -24,17 +24,24 @@
   - A breath's waveform is cut out from the image of that breath's last frame as "the column after the start pen tip through the end pen tip column".
     For breaths longer than one sweep (about 5.4 s), the missing earlier part is cut out from images of earlier frames and joined (`Wave_Images` = number of images used)
   - Time of each point = `Wave_T0` + row number / `Wave_Rate` (Breaths.csv)
-  - Vertical axis: 0 µV = panel bottom edge (y=419.4), 20 µV = panel top edge (y=219.4). 10.0 px/µV (calibrated with 24 breaths' Edipeak in the sample, residual SD 0.1 µV)
-  - Parts above the vertical-axis upper limit are not drawn, so they are clipped at the upper-limit value (20 µV) (`Clipped_Points` = number of such points, `Clipped` in Alert).
+  - Vertical axis: 0 µV = panel bottom edge (y=419.4), upper limit = panel top edge (y=219.4) (with the upper limit 20 µV: 10.0 px/µV, calibrated with 24 breaths' Edipeak in the sample, residual SD 0.1 µV)
+  - Upper limit: read from the label at the top left of the Edi band ("20", "25", ...) with whole-label templates (`axis_labels.npz`, labels 5-80 µV).
+    The Servo-U changes the Edi scale often (auto-scaling; in the validation videos every few to tens of seconds) and redraws the whole trace at the new scale in the same frame,
+    so each image's columns are converted with the label read on that image (`Edi_Scale` in Frames.csv; Breaths.csv `Edi_Scale` = the breath's last image, `E_max` = the largest in the breath).
+    A label hidden by the trace is taken from the reads before and after when they are equal and at most `scale_fill_sec` (7 s) apart.
+    Otherwise the breath has no waveform (`ScaleUnknown` in Alert). A label that has no template is never guessed
+  - Parts above the vertical-axis upper limit are not drawn, so they are clipped at the upper-limit value (`Clipped_Points` = number of such points, `Clipped` in Alert).
     For such breaths, the on-screen Edipeak value is the correct one
 
 ## Expected Layout
 See `layout.jpg` (red boxes: OCR, white box: Edi waveform, gray box: ECG used to detect the sweep position, yellow box: Edi bar (excluded), blue boxes: text for the screen check and the vertical-axis scale label).
 
 ## Limitations
-- The vertical-axis upper limit is a setting (`edi_scale_max`, default 20 µV). The scale label "20" is too small to OCR, so frames that differ from the reference image (`scale_reference.png`)
-  are marked Abnormal and that breath's waveform is not output (`ScaleChanged` in Alert). For videos with a different upper limit, set `edi_scale_max` accordingly and recreate the reference image
-- Parts above the vertical-axis upper limit (20 µV) are clipped (see above)
+- Edi axis labels without a template (e.g. above 80 µV) are not read: those breaths have no waveform (`ScaleUnknown`). Add templates with `tools/build_axis_labels.py`.
+  `edi_scale_max` (default 20 µV) is used only when `axis_labels.npz` is missing
+- Parts above the vertical-axis upper limit are clipped (see above)
+- Accuracy: the Servo-U does not log while in standby, so no ventilator export covers this screen. The engine is checked with on-screen values
+  (Edipeak vs the waveform maximum) and by eye (see CHANGELOG)
 - Breath boundaries follow the Servo-U's breath detection (display updates). Small Edi fluctuations may also be counted as one breath
 - The first and last breaths of a recording are cut off partway (`Fragment` in Alert)
 - Columns overlapping the Edi bar at the right edge (x=1000-1048) and the white dashed line (x=1003-1007, 1041-1045) are not read; they are interpolated from both neighbors
