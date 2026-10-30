@@ -7,7 +7,7 @@
 ## Description
 - **OCR**: Edipeak and Edimin (values on the right). Only frames where the display changed are OCR'd
   - If no breath is detected for about 10 s, both become "***" (no value; `NoBreathDetected` in that breath's Alert)
-  - A read that is not what the Servo-U shows (1-2 digits and one decimal, e.g. "233, 8" when the decimal point is read as a digit) is left empty, so values of 100 µV or more are never read
+  - A read that is not what the Servo-U shows (1-2 digits and one decimal, e.g. "233, 8" when the decimal point is read as a digit) is read once more at twice the size; if that also fails, it is left empty. Values of 100 µV or more are never read
 - **1 breath** = from the onset of an Edi rise to the next breath's onset; breaths are the ones the Servo-U detects (Edipeak display updates)
   - The Servo-U updates Edimin when Edi rises (onset of neural inspiration), and Edipeak after Edi passes its peak and starts to fall (about 0.35 s later)
   - When a value equals the previous one the display does not change and the update is invisible, so breaths are counted by Edipeak updates, and the Edimin update just before each (within `max_onset_lag_sec`) is taken as the onset.
@@ -20,7 +20,7 @@
 - **Values in Breaths.csv**
   - `EdiPeak`: the Edipeak shown for that breath
   - `Edimin`: minimum of that breath's expiration = the Edimin shown at the next breath's onset (verified to match the waveform minimum).
-    `Edimin_displayed` is the value shown during that breath (= minimum of the previous breath's expiration)
+    `Edimin_displayed` is the value shown during that breath (= minimum of the previous breath's expiration). Both are read from the breath's Edipeak update on (the Servo-U updates Edimin after the breath has started)
   - `Wave_Max` / `Wave_Min`: maximum / minimum of the extracted waveform (µV)
 - **Waveform**: Edi (columns of BreathCSVs/<n>.csv are X, Edi; unit µV)
   - The sweep draws left to right at about 164 px/s; on reaching x=1046 it returns to x=150 and overwrites (one sweep 896 px ≈ 5.4 s, wrap around)

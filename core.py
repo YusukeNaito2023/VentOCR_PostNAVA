@@ -285,6 +285,13 @@ def initial_ocr(frames, total_frames, subfolder, settings={},
                     try:
                         result = reader.readtext(roi.astype(np.uint8), allowlist="0123456789.*")
                         last_val[key] = _parse_ocr(result)
+                        if last_val[key][0] == "":
+                            # 0.3.1: a read that is not a displayed value is read again at twice the size ("1" -> "1.1",
+                            # validation video 14-58-39); only when the first read failed
+                            big = cv2.resize(roi.astype(np.uint8), None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+                            again = _parse_ocr(reader.readtext(big, allowlist="0123456789.*"))
+                            if again[0] != "":
+                                last_val[key] = (again[0], f"{last_val[key][1]} -> {again[1]}", again[2])
                     except Exception:
                         last_val[key] = ("", "", "0.00")
                     last_ocr_roi[key] = roi
@@ -511,6 +518,13 @@ def _wave_onset(edi, a, p, peak_win, min_cover=0.6, min_height=1.0, rel=0.1, abs
     return a + int(low[-1])
 
 
+def _after_update(df, s, e, p):
+    """Normal frames of a breath (rows s..e) from its Edipeak update p on (the whole breath when p is None or outside it)."""
+    a = p if p is not None and s <= p <= e else s
+    seg = df.iloc[a:e + 1]
+    return seg[seg["Abnormal"] == 0]
+
+
 def post_ocr(df, Analyze_Id, user_ID, settings={}):
     """
     Find breath boundaries (Edipeak/Edimin display updates) and assign breath numbers and pen-tip positions.
@@ -621,9 +635,7 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
     groups = list(df.groupby("BreathNumber", sort=True))
     for k, (no, g) in enumerate(groups):
         s, e = int(g.index[0]), int(g.index[-1])
-        normal = g[g["Abnormal"] == 0]
         nxt = groups[k + 1][1] if k + 1 < len(groups) else None
-        nxt_normal = nxt[nxt["Abnormal"] == 0] if nxt is not None else None
         # From this breath's Edipeak update (the first update within the breath) to just before the next breath's Edipeak update
         p = next((i for i in range(s, e + 1) if i in peak_set), None)
         q = next((i for i in range(e + 1, n) if i in peak_set), n)
@@ -643,9 +655,16 @@ def post_ocr(df, Analyze_Id, user_ID, settings={}):
             row["EdiPeak_Frame"] = int(df.at[p, "Frame"])
         else:
             row["EdiPeak"], row["EdiPeak_Frame"] = np.nan, np.nan
-        # Edimin: minimum of this breath's expiration = value shown at the next breath's onset. *_displayed is the value shown during this breath
-        row["Edimin"] = _mode(nxt_normal["Edimin_Value"]) if nxt_normal is not None and "Edimin_Value" in df else np.nan
-        row["Edimin_displayed"] = _mode(normal["Edimin_Value"]) if "Edimin_Value" in df else np.nan
+        # Edimin: minimum of this breath's expiration = value shown at the next breath's onset. *_displayed is the value shown during this breath.
+        # 0.3.1: both are read from the breath's Edipeak update to its end: the breath now starts where Edi rises, before the
+        # Servo-U updates Edimin, so its first frames can still show the previous value (21 of 887 breaths of validation video
+        # 14-58-39 took that value when the whole breath was used)
+        if "Edimin_Value" in df:
+            row["Edimin_displayed"] = _mode(_after_update(df, s, e, p)["Edimin_Value"])
+            row["Edimin"] = (_mode(_after_update(df, int(nxt.index[0]), int(nxt.index[-1]), q if q < n else None)["Edimin_Value"])
+                             if nxt is not None else np.nan)
+        else:
+            row["Edimin"] = row["Edimin_displayed"] = np.nan
         row["Onset_Estimated"] = int(est_of.get(s, False)) if s in est_of else np.nan
         row["Onset_Source"] = src_of.get(s, "")   # 0.3.1: wave (Edi trace), edimin (Edimin update) or estimated
         row["Edi_Scale"] = float(df.at[e, "Edi_Scale"])  # scale of the breath's last image (each image is converted with its own scale)
