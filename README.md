@@ -8,6 +8,8 @@
 - **OCR**: Edipeak and Edimin (values on the right). Only frames where the display changed are OCR'd
   - If no breath is detected for about 10 s, both become "***" (no value; `NoBreathDetected` in that breath's Alert)
   - A read that is not what the Servo-U shows (1-2 digits and one decimal, e.g. "233, 8" when the decimal point is read as a digit) is read once more at twice the size; if that also fails, it is left empty. Values of 100 µV or more are never read
+  - 0.3.2: an Edipeak of 10 or more above twice the breath's waveform maximum (not clipped) is read again on up to 4 later frames (EasyOCR can read the decimal point as a "3": "43, 8" for 4.8).
+    A re-read that fits the waveform replaces it; otherwise a value read at least twice with its decimal point is kept (the Servo-U Edipeak can be well above the trace); otherwise it is left empty (`EdiPeakUnreadable` in Alert)
 - **1 breath** = from the onset of an Edi rise to the next breath's onset; breaths are the ones the Servo-U detects (Edipeak display updates)
   - The Servo-U updates Edimin when Edi rises (onset of neural inspiration), and Edipeak after Edi passes its peak and starts to fall (about 0.35 s later)
   - When a value equals the previous one the display does not change and the update is invisible, so breaths are counted by Edipeak updates, and the Edimin update just before each (within `max_onset_lag_sec`) is taken as the onset.
@@ -48,6 +50,7 @@ See `layout.jpg` (red boxes: OCR, white box: Edi waveform, gray box: ECG used to
 - Accuracy: the Servo-U does not log while in standby, so no ventilator export covers this screen. The engine is checked with on-screen values
   (Edipeak vs the waveform maximum) and by eye (see CHANGELOG)
 - Breath boundaries follow the Servo-U's breath detection (display updates). Small Edi fluctuations may also be counted as one breath
+- Fast breathing with many small breaths (validation hour 16-58-39): a breath of a few µV on a 25-35 µV axis is only a few pixels high, so its waveform and boundaries are coarse (see CHANGELOG 0.3.2)
 - The first and last breaths of a recording are cut off partway (`Fragment` in Alert)
 - Columns overlapping the Edi bar at the right edge (x=1000-1048) and the white dashed line (x=1003-1007, 1041-1045) are not read; they are interpolated from both neighbors
 

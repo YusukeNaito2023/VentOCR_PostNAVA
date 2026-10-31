@@ -30,7 +30,7 @@ from tqdm import tqdm
 from . import Settings
 from . import axis_labels
 
-ENGINE_VERSION = "0.3.1"
+ENGINE_VERSION = "0.3.2"
 VENTOCR_TESTED = "0.5.5"
 
 ENGINE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -814,6 +814,39 @@ def _read_frame(frames_root, frame_no):
     return None if img is None else _normalize_frame(img)
 
 
+def _reread_peak(frames_root, frame_nos, reader):
+    """0.3.2: read the Edipeak box again on the given frames, at 1x and 2x → [(value, raw)] of the reads that parse."""
+    reads = []
+    for f in frame_nos:
+        frame = _read_frame(frames_root, f)
+        if frame is None:
+            continue
+        roi = _crop(_to_gray(frame), Settings.ROIs["EdiPeak"]).astype(np.uint8)
+        for img in (roi, cv2.resize(roi, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)):
+            v, raw, _ = _parse_ocr(reader.readtext(img, allowlist="0123456789.*"))
+            if v not in ("", NO_VALUE):
+                reads.append((float(v), raw))
+    return reads
+
+
+def _check_peak(peak, wave_max, reads):
+    """0.3.2: Edipeak of a breath whose value is 10 or more and above twice its waveform's maximum → (value, unreadable).
+
+    EasyOCR sometimes reads the decimal point as a "3" in a separate box ("43, 8" for 4.8; 14 breaths of the 8 validation
+    hours, all checked against the screen), which passes the format check. A re-read that fits the waveform (at most twice
+    Wave_Max) replaces the value. Otherwise the value read most often with its decimal point is taken when it was read so at
+    least twice (the Servo-U Edipeak can be well above the trace: 11.1, 14.5 and 8.8 were shown on three validation breaths
+    whose waveform maximum was about 3 µV). Otherwise it is left empty.
+    """
+    fits = [v for v, _ in reads if v <= 2 * wave_max]
+    if fits:
+        return _mode(pd.Series(fits)), False
+    dotted = pd.Series([v for v, raw in reads if "." in raw], dtype=float)
+    if len(dotted) and (dotted == _mode(dotted)).sum() >= 2:
+        return _mode(dotted), False
+    return np.nan, True
+
+
 def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
                   settings={}, overwrite=False, archive_dir=None):
     """
@@ -849,6 +882,12 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
                                 "Start_File_Name", "End_File_Name")}
     alerts = df_breaths["Alert"].fillna("").astype(str).tolist()
     written = 0
+    # 0.3.2: Edipeak checked against the waveform (_check_peak); the value stays on screen until the next breath's update
+    peaks = (pd.to_numeric(df_breaths["EdiPeak"], errors="coerce").to_numpy(float, copy=True) if "EdiPeak" in df_breaths
+             else np.full(len(df_breaths), np.nan))
+    peak_frames = (pd.to_numeric(df_breaths["EdiPeak_Frame"], errors="coerce").to_numpy(float) if "EdiPeak_Frame" in df_breaths
+                   else np.full(len(df_breaths), np.nan))
+    reader, reread, emptied = None, 0, 0
 
     # 0.2.0 (engine_api 3): open the images to be used up front, in ascending frame order. The app creates opened images from the segment video,
     # and forward reading proceeds without re-seeking. The processing below reads backward from each breath's end image,
@@ -943,12 +982,30 @@ def extract_waves(df_frames, df_breaths, frames_root, output_dir, user_ID,
         rec["Wrapped"] = int(len(u) > 1 and (np.diff(xs) < 0).any())
         if clipped:
             alerts[k] = ",".join(filter(None, [alerts[k], "Clipped"]))
+        elif peaks[k] >= 10 and peaks[k] > 2 * rec["Wave_Max"] and np.isfinite(peak_frames[k]):
+            p = int(peak_frames[k])
+            nxt = peak_frames[k + 1] if k + 1 < len(peak_frames) and np.isfinite(peak_frames[k + 1]) else frame_no[-1] + 1
+            if reader is None:
+                reader = _ensure_easyocr_reader_ready(settings.get("initial_ocr", {}).get("use_gpu", True))
+            reads = _reread_peak(frames_root, [f for f in (p + 2, p + 5, p + 8, p + 11) if f < nxt and f in pos_of_frame], reader)
+            value, unreadable = _check_peak(peaks[k], rec["Wave_Max"], reads)
+            reread += 1
+            if value != peaks[k]:
+                print(f"[extract_waves] breath {int(b['BreathNumber'])}: Edipeak {peaks[k]} -> {value} (Wave_Max {rec['Wave_Max']})")
+                peaks[k] = value
+            if unreadable:
+                emptied += 1
+                alerts[k] = ",".join(filter(None, [alerts[k], "EdiPeakUnreadable"]))
         for c in new_cols:
             new_cols[c].append(rec[c])
 
     for c, v in new_cols.items():
         df_breaths[c] = v
     df_breaths["Alert"] = alerts
+    if "EdiPeak" in df_breaths:
+        df_breaths["EdiPeak"] = peaks
+    if reread:
+        print(f"[extract_waves] Edipeak above twice Wave_Max on {reread} breaths: read again, {emptied} left empty")
 
     if archive_dir is not None:
         os.makedirs(archive_dir, exist_ok=True)

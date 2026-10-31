@@ -1,5 +1,39 @@
 # CHANGELOG
 
+## 0.3.2 (2026-10-31)
+Edipeak checked against the waveform. Released together with 0.3.0 and 0.3.1 (neither was published).
+
+- EasyOCR sometimes reads the decimal point of Edipeak as a "3" in its own box: "43, 8" for 4.8, "83, 8" for 8.8. This passes the 0.3.1 format check (1-2 digits and one decimal). The 8 validation hours (0.3.1, 7262 breaths) had 14 such breaths, all checked against the screen digits: 4.8 -> 43.8 (7), 8.8 -> 83.8 (3), 8.6 -> 83.6 (2), 8.3 -> 83.3 (2); 7 of them in hour 16-58-39.
+- `extract_waves`: when Edipeak is 10 or more and above twice the breath's Wave_Max (and the waveform is not clipped), the Edipeak box is read again on up to 4 frames after the Edipeak update (+0.2, +0.5, +0.8, +1.1 s, before the next update), at 1x and 2x (`_reread_peak`, `_check_peak`):
+  - a re-read that fits the waveform (at most twice Wave_Max) replaces the value;
+  - otherwise the value read most often with its decimal point is taken, when it was read so at least twice. The Servo-U Edipeak can be well above the trace: 11.1, 14.5 and 8.8 were shown on three validation breaths whose waveform maximum was about 3 µV, and 16.2 / 13.5 on two with about 7 µV;
+  - otherwise Edipeak is left empty with the new Alert `EdiPeakUnreadable` (excluded from accuracy).
+  A single 2x re-read was not enough: on the misread frames it often returned nothing or "44.8".
+- Only those breaths are read again (13 in the two hours re-run), so the analysis time is unchanged.
+
+### Check (own Python 3.14 environment with the VentOCR 0.8.1 pins, CLI `python -m ventocr_core`, 10 fps, 2026-10-31)
+- Hours 16-58-39 and 18-58-39 re-run with 0.3.2 (813 s and 899 s): breaths, boundaries, Edimin, Edimin_displayed and Wave_Max identical to 0.3.1. Edipeak: 7 + 3 breaths corrected, 3 kept (16.2, 13.5, 14.5), none emptied. All 13 match the screen digits.
+- The 4 misread breaths of the other hours (13-58-30 breath 361, 15-58-39 breath 375, 17-58-39 breath 600, 20-58-39 breath 195) give the screen value when `_reread_peak` / `_check_peak` are run on their frames; 15-58-39 breath 466 (11.1) stays 11.1, as on the screen.
+- A 2x-only re-read crashed on its first correction under pandas 3 (read-only array); fixed before the runs above.
+
+### 8 validation hours (2026-10-24, Servo-U Edi monitor in standby, 1920x1080)
+0.3.1 for hours 13-58-30, 14-58-39, 15-58-39, 17-58-39, 19-58-39 and 20-58-39; 0.3.2 for 16-58-39 and 18-58-39 (0.3.2 changes only Edipeak of the misread breaths). Breaths without excluded alerts; "late" = first / last waveform point above 20% of the rise.
+
+| Hour | Breaths | Waveforms | Label read | Edipeak vs Wave_Max within 10% | Late starts | Late ends | Wall |
+|---|---|---|---|---|---|---|---|
+| 13-58-30 | 777 | 775 | 99.2% | 96.9% | 6.0% | 7.9% | 879 s |
+| 14-58-39 | 933 | 933 | 99.9% | 95.3% | 9.5% | 9.5% | 596 s |
+| 15-58-39 | 1050 | 1050 | 99.9% | 95.9% | 8.3% | 11.0% | 683 s |
+| 16-58-39 | 1409 | 1409 | 99.7% | 88.2% | 18.7% | 21.2% | 813 s |
+| 17-58-39 | 711 | 711 | 99.9% | 93.7% | 7.9% | 11.8% | 705 s |
+| 18-58-39 | 745 | 742 | 99.7% | 95.5% | 7.9% | 12.1% | 899 s |
+| 19-58-39 | 704 | 702 | 99.6% | 95.3% | 5.3% | 10.3% | 716 s |
+| 20-58-39 | 933 | 930 | 99.8% | 94.9% | 9.8% | 10.4% | 733 s |
+
+10 of 7262 breaths have no waveform (`ScaleUnknown`).
+
+Known limitation, hour 16-58-39: fast breathing (median breath 1.9 s; 3.5 s in 14-58-39) with many small, short breaths (median Edipeak 11.6 µV), mostly drawn on 25-35 µV axes, where a breath is only a few pixels high. By eye, 48 random breaths: 43 right; 2 end late, running into the next rise (833, 1203); 2 tiny breaths whose Edipeak (2.8, 3.4) is above the trace (1.6, 1.4 µV; 1245, 1285), at the limit of the pixel resolution; 1 Edipeak misread (1202, fixed in 0.3.2). Among the 172 breaths more than 10% off, one was split at the top of a rise (1140). The ventilator counts these small breaths (they are real); the boundary metric overstates late boundaries on them.
+
 ## 0.3.1 (2026-10-30)
 Breath onsets from the Edi trace, and implausible Edipeak / Edimin reads left empty. Released together with 0.3.0 (0.3.0 was not published).
 
